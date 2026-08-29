@@ -626,8 +626,7 @@ fun TcpManagementScreen(
     connectedClients: List<ConnectedClient>,
     packetsSent: Long,
     packetsReceived: Long,
-    logs: List<NetworkLog>,
-    onEditScheduleClick: () -> Unit
+    logs: List<NetworkLog>
 ) {
     var messageText by remember { mutableStateOf("") }
     val localIp = remember { NetworkUtils.getLocalIpAddress() }
@@ -649,49 +648,46 @@ fun TcpManagementScreen(
             .testTag("tcp_management_page"),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Banner de Horario Activo con Botón de Modificar
+        // Banner de Horario Activo
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
                 border = BorderStroke(1.dp, TechTealSecondary.copy(alpha = 0.4f)),
                 shape = RoundedCornerShape(16.dp)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.AccessTime, contentDescription = null, tint = TechTealSecondary, modifier = Modifier.size(16.dp))
-                            Text("Horario Configurado", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                        }
-                        Text(
-                            text = "Wi-Fi ON (TCP Apagada): ${scheduleConfig.wifiScheduleFormatted}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = CyberCyanPrimary
-                        )
-                        Text(
-                            text = "Red TCP ON (Complemento): ${scheduleConfig.hotspotScheduleFormatted}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TechTealSecondary
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = onEditScheduleClick,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CyberCyanPrimary),
-                        border = BorderStroke(1.dp, CyberCyanPrimary),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.testTag("button_change_schedule")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Cambiar", fontSize = 13.sp)
+                        Icon(
+                            Icons.Default.AccessTime,
+                            contentDescription = null,
+                            tint = TechTealSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            "Horario de Conmutación Activo",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
                     }
+                    Text(
+                        text = "Wi-Fi ON (TCP Apagada): ${scheduleConfig.wifiScheduleFormatted}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = CyberCyanPrimary
+                    )
+                    Text(
+                        text = "Red TCP ON (Complemento): ${scheduleConfig.hotspotScheduleFormatted}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TechTealSecondary
+                    )
                 }
             }
         }

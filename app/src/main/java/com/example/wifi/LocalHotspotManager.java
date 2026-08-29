@@ -129,16 +129,6 @@ public class LocalHotspotManager {
             return;
         }
 
-        // Check if Wi-Fi is disabled; enable it so SoftAP can initialize
-        try {
-            if (!wifiManager.isWifiEnabled()) {
-                logger.i(TAG, "Activando radio Wi-Fi para inicializar Red Local Hotspot...");
-                wifiManager.setWifiEnabled(true);
-            }
-        } catch (Exception e) {
-            logger.d(TAG, "Notice setting wifi enabled for hotspot: " + e.getMessage());
-        }
-
         isStarting = true;
         logger.i(TAG, "Iniciando creación de Red Local Wi-Fi (SSID deseado: " + preferredSsid + ")...");
         updateState(HotspotInfo.starting());

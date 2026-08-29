@@ -74,8 +74,8 @@ public class PersistentWifiTcpService extends Service {
             // Initialize Schedule Manager with persistent preferences
             scheduleManager.init(this);
 
-            // Acquire WakeLock & WifiLock to keep CPU & Wi-Fi radios powered
-            acquireWakeAndWifiLocks();
+            // Acquire WakeLock to keep CPU powered in background
+            acquireWakeLock();
 
             // Initialize Core Subsystems in Java
             wifiController = new WifiController(this);
@@ -112,7 +112,7 @@ public class PersistentWifiTcpService extends Service {
         }
     }
 
-    private void acquireWakeAndWifiLocks() {
+    private void acquireWakeLock() {
         try {
             PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (powerManager != null) {
@@ -123,18 +123,6 @@ public class PersistentWifiTcpService extends Service {
             }
         } catch (Exception e) {
             logger.w(TAG, "WakeLock error: " + e.getMessage());
-        }
-
-        try {
-            WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wifiManager != null) {
-                wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "WiFiTcpMesh::WifiLock");
-                wifiLock.setReferenceCounted(false);
-                wifiLock.acquire();
-                logger.i(TAG, "High-Perf WifiLock acquired (maintains radio power).");
-            }
-        } catch (Exception e) {
-            logger.w(TAG, "WifiLock error: " + e.getMessage());
         }
     }
 
