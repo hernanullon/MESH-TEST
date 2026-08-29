@@ -1,0 +1,7 @@
+{
+  "name": "WiFi & TCP Local Mesh",
+  "description": "Background persistent service controlling Wi-Fi state, local ad-hoc hotspot creation, and autonomous TCP connection management without internet.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
