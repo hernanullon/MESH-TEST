@@ -107,6 +107,23 @@ public class ScheduleManager {
         logger.i(TAG, "Horarios restaurados a valores predeterminados.");
     }
 
+    public synchronized void setActiveDays(java.util.Collection<Integer> days) {
+        this.config.setActiveDays(days);
+        this.lastAppliedWifiState = null;
+        this.lastAppliedHotspotState = null;
+        saveToPreferences();
+        logger.i(TAG, "Días de operación actualizados: " + config.getActiveDaysFormatted());
+    }
+
+    public synchronized void setDayActive(int dayOfWeek, boolean active) {
+        this.config.setDayActive(dayOfWeek, active);
+        this.lastAppliedWifiState = null;
+        this.lastAppliedHotspotState = null;
+        saveToPreferences();
+        logger.i(TAG, "Día " + ScheduleConfig.getDayFullName(dayOfWeek) + (active ? " ACTIVADO" : " DESACTIVADO")
+                + " | Activos: " + config.getActiveDaysFormatted());
+    }
+
     public synchronized void setInvertedSchedule(int offStartH, int offStartM, int offEndH, int offEndM) {
         this.config.applyInvertedSchedule(offStartH, offStartM, offEndH, offEndM);
         this.lastAppliedWifiState = null;
@@ -168,11 +185,13 @@ public class ScheduleManager {
 
      public synchronized void evaluateAndApply(WifiController wifiController, LocalHotspotManager hotspotManager, com.example.tcp.TcpConnectionManager tcpManager) {
          Calendar now = Calendar.getInstance();
+         int dayOfWeek = now.get(Calendar.DAY_OF_WEEK);
          int hour = now.get(Calendar.HOUR_OF_DAY);
          int minute = now.get(Calendar.MINUTE);
          int second = now.get(Calendar.SECOND);
 
          String currentTimeStr = String.format(Locale.US, "%02d:%02d:%02d", hour, minute, second);
+         String currentDayName = ScheduleConfig.getDayFullName(dayOfWeek);
 
          // Sync configured fixed credentials to HotspotManager
          if (hotspotManager != null && config != null) {
@@ -180,6 +199,52 @@ public class ScheduleManager {
          }
 
          int targetPort = config != null ? config.getTcpPort() : 8888;
+
+         // Check if TODAY is an active operating day
+         boolean isOperatingDay = config != null && config.isDayActive(dayOfWeek);
+
+         // If today is NOT an operating day, SHUT DOWN ALL MODULES (Wi-Fi, Hotspot, TCP Server)
+         if (!isOperatingDay) {
+             if (hotspotManager != null && (hotspotManager.isHotspotActive() || hotspotManager.isStarting())) {
+                 logger.i(TAG, String.format(Locale.US,
+                         "[Schedule] %s -> %s (Inactive). Stopping Hotspot...", currentTimeStr, currentDayName));
+                 try {
+                     hotspotManager.stopLocalHotspot();
+                 } catch (Throwable t) {
+                     logger.w(TAG, "Error stopping hotspot: " + t.getMessage());
+                 }
+             }
+
+             if (tcpManager != null && tcpManager.isServerRunning()) {
+                 logger.i(TAG, String.format(Locale.US,
+                         "[Schedule] %s -> %s (Inactive). Stopping TCP server...", currentTimeStr, currentDayName));
+                 try {
+                     tcpManager.stopServer();
+                 } catch (Throwable t) {
+                     logger.w(TAG, "Error stopping TCP server: " + t.getMessage());
+                 }
+             }
+
+             if (wifiController != null && (lastAppliedWifiState == null || lastAppliedWifiState || wifiController.isWifiEnabled())) {
+                 logger.i(TAG, String.format(Locale.US,
+                         "[Schedule] %s -> %s (Inactive). Disabling Wi-Fi...", currentTimeStr, currentDayName));
+                 try {
+                     wifiController.setWifiEnabled(false);
+                 } catch (Throwable t) {
+                     logger.w(TAG, "Error disabling Wi-Fi: " + t.getMessage());
+                 }
+             }
+
+             lastAppliedWifiState = false;
+             lastAppliedHotspotState = false;
+
+             lastEvaluationSummary = String.format(Locale.US,
+                     "Time: %s | %s: Inactive",
+                     currentTimeStr, currentDayName);
+
+             notifyScheduleEvaluated(false, false, lastEvaluationSummary);
+             return;
+         }
 
          // Primary schedule: Is Hotspot / TCP active right now?
          boolean hotspotTargetState = config.isHotspotScheduleEnabled() && config.shouldHotspotBeActive(hour, minute);
@@ -192,7 +257,7 @@ public class ScheduleManager {
              // Ensure Wi-Fi is turned OFF to avoid hardware conflict
              if (wifiController != null && (lastAppliedWifiState == null || lastAppliedWifiState)) {
                  logger.i(TAG, String.format(Locale.US,
-                         "[Horario Auto] %s -> Activando Red TCP Local. Apagando Wi-Fi por exclusividad mutua.", currentTimeStr));
+                         "[Schedule] %s (%s) -> Starting TCP Network. Wi-Fi OFF.", currentTimeStr, currentDayName));
                  try {
                      wifiController.setWifiEnabled(false);
                  } catch (Throwable t) {
@@ -201,36 +266,12 @@ public class ScheduleManager {
                  lastAppliedWifiState = false;
              }
 
-             // Start Hotspot if not running
+             // Start or revive Hotspot using active interface probe and keep-alive watchdog
              if (hotspotManager != null) {
-                 boolean currentHotspot = hotspotManager.isHotspotActive();
-                 if (lastAppliedHotspotState == null || !lastAppliedHotspotState) {
-                     logger.s(TAG, String.format(Locale.US,
-                             "[Horario Auto] %s -> Encendiendo Red Local (SSID: %s, Puerto: %d)...",
-                             currentTimeStr, config.getCustomSsid(), targetPort));
-                     if (!currentHotspot && !hotspotManager.hasRecentFailure(60000)) {
-                         try {
-                             hotspotManager.startLocalHotspot();
-                         } catch (Throwable t) {
-                             logger.w(TAG, "Error iniciando hotspot: " + t.getMessage());
-                         }
-                     }
-                     if (tcpManager != null && !tcpManager.isServerRunning()) {
-                         try {
-                             tcpManager.startServer(targetPort);
-                         } catch (Throwable t) {
-                             logger.w(TAG, "Error iniciando TCP server: " + t.getMessage());
-                         }
-                     }
-                     lastAppliedHotspotState = true;
-                 } else if (!currentHotspot && !hotspotManager.isStarting() && !hotspotManager.hasRecentFailure(120000)) {
-                     logger.d(TAG, "[Horario Auto] Reintentando inicio de Red Local...");
-                     try {
-                         hotspotManager.startLocalHotspot();
-                     } catch (Throwable t) {
-                         logger.w(TAG, "Error reintentando hotspot: " + t.getMessage());
-                     }
-                 }
+                 int clientCount = (tcpManager != null && tcpManager.getConnectedClients() != null)
+                         ? tcpManager.getConnectedClients().size() : 0;
+                 hotspotManager.checkAndReviveIfNeeded(clientCount);
+                 lastAppliedHotspotState = true;
              }
 
              // Ensure TCP server is active on target port
@@ -238,7 +279,7 @@ public class ScheduleManager {
                  try {
                      tcpManager.startServer(targetPort);
                  } catch (Throwable t) {
-                     logger.w(TAG, "Error asegurando TCP server: " + t.getMessage());
+                     logger.w(TAG, "Error ensuring TCP server: " + t.getMessage());
                  }
              }
          } else {
@@ -247,19 +288,19 @@ public class ScheduleManager {
                  boolean currentHotspot = hotspotManager.isHotspotActive();
                  if (lastAppliedHotspotState == null || lastAppliedHotspotState) {
                      logger.i(TAG, String.format(Locale.US,
-                             "[Horario Auto] %s -> Apagando Red TCP Local (Inicio ventana Wi-Fi)...", currentTimeStr));
+                             "[Schedule] %s (%s) -> Stopping TCP Network...", currentTimeStr, currentDayName));
                      if (currentHotspot || hotspotManager.isStarting()) {
                          try {
                              hotspotManager.stopLocalHotspot();
                          } catch (Throwable t) {
-                             logger.w(TAG, "Error deteniendo hotspot: " + t.getMessage());
+                             logger.w(TAG, "Error stopping hotspot: " + t.getMessage());
                          }
                      }
                      if (tcpManager != null && tcpManager.isServerRunning()) {
                          try {
                              tcpManager.stopServer();
                          } catch (Throwable t) {
-                             logger.w(TAG, "Error deteniendo TCP server: " + t.getMessage());
+                             logger.w(TAG, "Error stopping TCP server: " + t.getMessage());
                          }
                      }
                      lastAppliedHotspotState = false;
@@ -270,7 +311,7 @@ public class ScheduleManager {
                  try {
                      tcpManager.stopServer();
                  } catch (Throwable t) {
-                     logger.w(TAG, "Error deteniendo TCP server: " + t.getMessage());
+                     logger.w(TAG, "Error stopping TCP server: " + t.getMessage());
                  }
              }
 
@@ -278,12 +319,12 @@ public class ScheduleManager {
              if (wifiController != null) {
                  if (lastAppliedWifiState == null || lastAppliedWifiState != wifiTargetState) {
                      logger.s(TAG, String.format(Locale.US,
-                             "[Horario Auto] %s -> Conmutando a Wi-Fi: %s",
-                             currentTimeStr, (wifiTargetState ? "ENCENDIDO" : "APAGADO")));
+                             "[Schedule] %s (%s) -> Wi-Fi: %s",
+                             currentTimeStr, currentDayName, (wifiTargetState ? "ON" : "OFF")));
                      try {
                          wifiController.setWifiEnabled(wifiTargetState);
                      } catch (Throwable t) {
-                         logger.w(TAG, "Error conmutando Wi-Fi: " + t.getMessage());
+                         logger.w(TAG, "Error setting Wi-Fi: " + t.getMessage());
                      }
                      lastAppliedWifiState = wifiTargetState;
                  }
@@ -292,9 +333,10 @@ public class ScheduleManager {
 
          // Format summary status for UI telemetry
          lastEvaluationSummary = String.format(Locale.US,
-                 "Hora: %s | Modo: %s",
+                 "Time: %s | %s | %s",
                  currentTimeStr,
-                 (hotspotTargetState ? "RED TCP ON (Wi-Fi OFF)" : (wifiTargetState ? "WI-FI ON (Red TCP OFF)" : "STANDBY"))
+                 currentDayName,
+                 (hotspotTargetState ? "TCP ON" : (wifiTargetState ? "Wi-Fi ON" : "Standby"))
          );
 
          notifyScheduleEvaluated(wifiTargetState, hotspotTargetState, lastEvaluationSummary);

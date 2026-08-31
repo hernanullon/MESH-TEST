@@ -8,6 +8,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -113,6 +116,19 @@ fun MainAppContainer() {
             if (requiredPermissions.isNotEmpty()) {
                 permissionsLauncher.launch(requiredPermissions.toTypedArray())
             }
+
+            // Check and prompt Battery Optimization Exemption
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
+                    try {
+                        val batteryIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(batteryIntent)
+                    } catch (_: Exception) {}
+                }
+            }
         } catch (e: Exception) {
             logger.e("MainActivity", "Error requesting permissions: ${e.message}")
         }
@@ -179,7 +195,7 @@ fun MainAppContainer() {
                                 .background(if (isServiceRunning) StatusActive else TextMuted)
                         )
                         Text(
-                            text = if (currentScreen == 0) "Configuración de Red y Horarios" else "Gestión de Red Local TCP",
+                            text = if (currentScreen == 0) "Schedule & Network Setup" else "Local TCP Mesh",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary
@@ -194,7 +210,7 @@ fun MainAppContainer() {
                         ) {
                             Icon(
                                 Icons.Default.Schedule,
-                                contentDescription = "Modificar Horarios y Red",
+                                contentDescription = "Edit Schedule",
                                 tint = CyberCyanPrimary
                             )
                         }
@@ -254,6 +270,328 @@ fun MainAppContainer() {
 }
 
 /**
+ * Dialogo Nativo de Selección de Horario basado en Material 3 TimePicker
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MaterialTimePickerDialog(
+    title: String,
+    initialHour: Int,
+    initialMinute: Int,
+    onConfirm: (Int, Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val timePickerState = rememberTimePickerState(
+        initialHour = initialHour,
+        initialMinute = initialMinute,
+        is24Hour = true
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm(timePickerState.hour, timePickerState.minute)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CyberCyanPrimary,
+                    contentColor = CyberCyanOnPrimary
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("OK", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextMuted)
+            }
+        },
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.AccessTime, contentDescription = null, tint = CyberCyanPrimary)
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+        },
+        text = {
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                TimePicker(
+                    state = timePickerState,
+                    colors = TimePickerDefaults.colors(
+                        clockDialColor = DarkSurfaceVariant,
+                        clockDialSelectedContentColor = DarkBackground,
+                        clockDialUnselectedContentColor = TextPrimary,
+                        selectorColor = CyberCyanPrimary,
+                        containerColor = DarkSurface,
+                        periodSelectorBorderColor = CyberCyanPrimary,
+                        periodSelectorSelectedContainerColor = CyberCyanPrimary.copy(alpha = 0.25f),
+                        periodSelectorUnselectedContainerColor = DarkSurfaceVariant,
+                        periodSelectorSelectedContentColor = CyberCyanPrimary,
+                        periodSelectorUnselectedContentColor = TextMuted,
+                        timeSelectorSelectedContainerColor = CyberCyanPrimary.copy(alpha = 0.25f),
+                        timeSelectorUnselectedContainerColor = DarkSurfaceVariant,
+                        timeSelectorSelectedContentColor = CyberCyanPrimary,
+                        timeSelectorUnselectedContentColor = TextPrimary
+                    )
+                )
+            }
+        },
+        containerColor = DarkSurface,
+        shape = RoundedCornerShape(20.dp)
+    )
+}
+
+/**
+ * Componente interactivo para mostrar y seleccionar horas con el TimePicker
+ */
+@Composable
+fun TimeSelectionCard(
+    label: String,
+    subLabel: String,
+    hour: Int,
+    minute: Int,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    accentColor: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val formattedTime = String.format(Locale.US, "%02d:%02d", hour, minute)
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = DarkSurfaceVariant,
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(icon, contentDescription = null, tint = accentColor, modifier = Modifier.size(18.dp))
+                    Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = TextPrimary)
+                }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = accentColor.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = "Set",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accentColor,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = formattedTime,
+                style = MaterialTheme.typography.headlineMedium,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.ExtraBold,
+                color = accentColor
+            )
+
+            Text(
+                text = subLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+        }
+    }
+}
+
+/**
+ * Componente interactivo para seleccionar días de la semana de operación
+ */
+private data class DayInfo(val calendarDay: Int, val shortName: String, val fullName: String)
+
+@Composable
+fun DaysOfWeekSelector(
+    selectedDays: Set<Int>,
+    onToggleDay: (Int) -> Unit,
+    onSelectPreset: (Set<Int>) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val days = listOf(
+        DayInfo(Calendar.MONDAY, "M", "Monday"),
+        DayInfo(Calendar.TUESDAY, "T", "Tuesday"),
+        DayInfo(Calendar.WEDNESDAY, "W", "Wednesday"),
+        DayInfo(Calendar.THURSDAY, "T", "Thursday"),
+        DayInfo(Calendar.FRIDAY, "F", "Friday"),
+        DayInfo(Calendar.SATURDAY, "S", "Saturday"),
+        DayInfo(Calendar.SUNDAY, "S", "Sunday")
+    )
+
+    val currentCalendarDay = remember { Calendar.getInstance().get(Calendar.DAY_OF_WEEK) }
+    val isTodayActive = selectedDays.contains(currentCalendarDay)
+    val todayName = ScheduleConfig.getDayFullName(currentCalendarDay)
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        border = BorderStroke(1.dp, CyberCyanPrimary.copy(alpha = 0.35f)),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.DateRange, contentDescription = null, tint = CyberCyanPrimary)
+                    Text(
+                        text = "Operating Days",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isTodayActive) StatusActive.copy(alpha = 0.15f) else StatusError.copy(alpha = 0.15f),
+                    border = BorderStroke(1.dp, if (isTodayActive) StatusActive.copy(alpha = 0.4f) else StatusError.copy(alpha = 0.4f))
+                ) {
+                    Text(
+                        text = if (isTodayActive) "Today ($todayName): Active" else "Today ($todayName): Inactive",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isTodayActive) StatusActive else StatusError,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = "Select scheduled operating days. On non-operating days, all modules remain OFF.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+
+            // Circular chips row for each day
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                days.forEach { day ->
+                    val isSelected = selectedDays.contains(day.calendarDay)
+                    val isToday = day.calendarDay == currentCalendarDay
+
+                    Surface(
+                        onClick = { onToggleDay(day.calendarDay) },
+                        shape = CircleShape,
+                        color = when {
+                            isSelected -> CyberCyanPrimary
+                            else -> DarkSurfaceVariant
+                        },
+                        border = BorderStroke(
+                            width = if (isToday) 2.dp else 1.dp,
+                            color = if (isToday) TechTealSecondary else if (isSelected) CyberCyanPrimary else DarkBorder
+                        ),
+                        modifier = Modifier.size(42.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = day.shortName,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSelected) CyberCyanOnPrimary else TextPrimary
+                                )
+                                if (isToday) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(4.dp)
+                                            .background(if (isSelected) CyberCyanOnPrimary else TechTealSecondary, CircleShape)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Quick preset buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        onSelectPreset(setOf(
+                            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+                            Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
+                        ))
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = CyberCyanPrimary),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                ) {
+                    Text("All (7d)", style = MaterialTheme.typography.labelSmall)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        onSelectPreset(setOf(
+                            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+                            Calendar.THURSDAY, Calendar.FRIDAY
+                        ))
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TechTealSecondary),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                ) {
+                    Text("Mon - Fri", style = MaterialTheme.typography.labelSmall)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        onSelectPreset(setOf(Calendar.SATURDAY, Calendar.SUNDAY))
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                ) {
+                    Text("Weekends", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+/**
  * PÁGINA 1: Formulario de configuración de horario y Credenciales Fijas de Red (SSID / Clave / Puerto)
  */
 @Composable
@@ -265,10 +603,17 @@ fun ScheduleSetupScreen(
     tcpServerPort: Int,
     onScheduleSaved: () -> Unit
 ) {
-    var startHourText by remember { mutableStateOf(String.format(Locale.US, "%02d", initialConfig.offStartHour)) }
-    var startMinText by remember { mutableStateOf(String.format(Locale.US, "%02d", initialConfig.offStartMinute)) }
-    var endHourText by remember { mutableStateOf(String.format(Locale.US, "%02d", initialConfig.offEndHour)) }
-    var endMinText by remember { mutableStateOf(String.format(Locale.US, "%02d", initialConfig.offEndMinute)) }
+    var startHour by remember { mutableIntStateOf(initialConfig.offStartHour) }
+    var startMinute by remember { mutableIntStateOf(initialConfig.offStartMinute) }
+    var endHour by remember { mutableIntStateOf(initialConfig.offEndHour) }
+    var endMinute by remember { mutableIntStateOf(initialConfig.offEndMinute) }
+
+    var selectedDays by remember {
+        mutableStateOf(initialConfig.activeDays.map { it.toInt() }.toSet())
+    }
+
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
 
     // Campos de Red Fija para que todos los nodos conozcan siempre las mismas credenciales
     var customSsidText by remember { mutableStateOf(initialConfig.customSsid) }
@@ -286,17 +631,46 @@ fun ScheduleSetupScreen(
         }
     }
 
-    val sH = (startHourText.toIntOrNull() ?: 4).coerceIn(0, 23)
-    val sM = (startMinText.toIntOrNull() ?: 0).coerceIn(0, 59)
-    val eH = (endHourText.toIntOrNull() ?: 5).coerceIn(0, 23)
-    val eM = (endMinText.toIntOrNull() ?: 30).coerceIn(0, 59)
     val portNumber = (customPortText.toIntOrNull() ?: 8888).coerceIn(1024, 65535)
 
-    val previewOffStr = String.format(Locale.US, "%02d:%02d a %02d:%02d", sH, sM, eH, eM)
-    val previewTcpOnStr = remember(sH, sM, eH, eM) {
+    val previewOffStr = String.format(Locale.US, "%02d:%02d - %02d:%02d", startHour, startMinute, endHour, endMinute)
+    val previewTcpOnStr = remember(startHour, startMinute, endHour, endMinute) {
         val tempConfig = ScheduleConfig()
-        tempConfig.applyInvertedSchedule(sH, sM, eH, eM)
+        tempConfig.applyInvertedSchedule(startHour, startMinute, endHour, endMinute)
         tempConfig.hotspotScheduleFormatted
+    }
+
+    val daysFormatted = remember(selectedDays) {
+        val tempConfig = ScheduleConfig()
+        tempConfig.setActiveDays(selectedDays.map { java.lang.Integer.valueOf(it) })
+        tempConfig.activeDaysFormatted
+    }
+
+    // Native Time Selection Dialogs
+    if (showStartPicker) {
+        MaterialTimePickerDialog(
+            title = "Start Time (Wi-Fi ON)",
+            initialHour = startHour,
+            initialMinute = startMinute,
+            onConfirm = { h, m ->
+                startHour = h
+                startMinute = m
+            },
+            onDismiss = { showStartPicker = false }
+        )
+    }
+
+    if (showEndPicker) {
+        MaterialTimePickerDialog(
+            title = "End Time (Wi-Fi ON)",
+            initialHour = endHour,
+            initialMinute = endMinute,
+            onConfirm = { h, m ->
+                endHour = h
+                endMinute = m
+            },
+            onDismiss = { showEndPicker = false }
+        )
     }
 
     LazyColumn(
@@ -306,7 +680,7 @@ fun ScheduleSetupScreen(
             .testTag("schedule_setup_page"),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Encabezado
+        // Header
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -315,14 +689,14 @@ fun ScheduleSetupScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Configuración de Horario y Red Fija",
+                        text = "Schedule & Network Configuration",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Configura el horario de apagado de la Red TCP (prioridad Wi-Fi) y define el Nombre de Red (SSID) y Contraseña fijos para que todos los nodos puedan asociarse automáticamente.",
+                        text = "Configure operating days, Wi-Fi ON window (TCP OFF), and fixed mesh network credentials.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -333,7 +707,7 @@ fun ScheduleSetupScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Hora Actual del Dispositivo:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                        Text("Device Time:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = DarkSurfaceVariant,
@@ -353,7 +727,78 @@ fun ScheduleSetupScreen(
             }
         }
 
-        // Credenciales Fijas de la Red Local para Nodos
+        // Operating Days Selector
+        item {
+            DaysOfWeekSelector(
+                selectedDays = selectedDays,
+                onToggleDay = { day ->
+                    selectedDays = if (selectedDays.contains(day)) {
+                        selectedDays - day
+                    } else {
+                        selectedDays + day
+                    }
+                },
+                onSelectPreset = { preset ->
+                    selectedDays = preset
+                }
+            )
+        }
+
+        // Schedule Form
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, DarkBorder),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.AccessTime, contentDescription = null, tint = CyberCyanPrimary)
+                        Text(
+                            text = "Wi-Fi ON Window",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = CyberCyanPrimary
+                        )
+                    }
+
+                    Text(
+                        text = "Tap cards to set Wi-Fi active time. Outside this window, TCP Mesh operates.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TimeSelectionCard(
+                            label = "Start",
+                            subLabel = "Wi-Fi ON / TCP OFF",
+                            hour = startHour,
+                            minute = startMinute,
+                            icon = Icons.Default.PlayArrow,
+                            accentColor = CyberCyanPrimary,
+                            onClick = { showStartPicker = true },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        TimeSelectionCard(
+                            label = "End",
+                            subLabel = "Wi-Fi OFF / TCP ON",
+                            hour = endHour,
+                            minute = endMinute,
+                            icon = Icons.Default.Stop,
+                            accentColor = TechTealSecondary,
+                            onClick = { showEndPicker = true },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Fixed Network Credentials
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -364,7 +809,7 @@ fun ScheduleSetupScreen(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Default.VpnKey, contentDescription = null, tint = TechTealSecondary)
                         Text(
-                            text = "Credenciales Fijas de Red (SSID & Clave)",
+                            text = "Fixed Network Credentials",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = TechTealSecondary
@@ -372,7 +817,7 @@ fun ScheduleSetupScreen(
                     }
 
                     Text(
-                        text = "Estas credenciales serán las que tus nodos secundarios (ESP32, móviles, sensores) usarán para conectarse siempre de forma fija.",
+                        text = "Static credentials secondary nodes (ESP32, phones, sensors) use to connect to this mesh.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
@@ -380,7 +825,7 @@ fun ScheduleSetupScreen(
                     OutlinedTextField(
                         value = customSsidText,
                         onValueChange = { customSsidText = it },
-                        label = { Text("Nombre de Red Fijo (SSID)") },
+                        label = { Text("Network Name (SSID)") },
                         singleLine = true,
                         leadingIcon = { Icon(Icons.Default.WifiTethering, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_custom_ssid")
@@ -389,7 +834,7 @@ fun ScheduleSetupScreen(
                     OutlinedTextField(
                         value = customPassText,
                         onValueChange = { customPassText = it },
-                        label = { Text("Contraseña Fija (Mínimo 8 caracteres)") },
+                        label = { Text("Passphrase (min 8 chars)") },
                         singleLine = true,
                         leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_custom_pass")
@@ -398,7 +843,7 @@ fun ScheduleSetupScreen(
                     OutlinedTextField(
                         value = customPortText,
                         onValueChange = { if (it.length <= 5) customPortText = it },
-                        label = { Text("Puerto Socket TCP (ej. 8888)") },
+                        label = { Text("TCP Socket Port (e.g. 8888)") },
                         singleLine = true,
                         leadingIcon = { Icon(Icons.Default.Sensors, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_custom_port")
@@ -407,76 +852,7 @@ fun ScheduleSetupScreen(
             }
         }
 
-        // Formulario de Horario (Red TCP Apagada / Wi-Fi ON)
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, DarkBorder),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Wifi, contentDescription = null, tint = CyberCyanPrimary)
-                        Text(
-                            text = "Horario: Red TCP Apagada / Wi-Fi Encendido",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = CyberCyanPrimary
-                        )
-                    }
-
-                    // Hora Inicio
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("Hora Inicio:", modifier = Modifier.width(90.dp), color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
-                        OutlinedTextField(
-                            value = startHourText,
-                            onValueChange = { if (it.length <= 2) startHourText = it },
-                            label = { Text("HH (0-23)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f).testTag("input_start_hh")
-                        )
-                        Text(":", style = MaterialTheme.typography.titleLarge, color = TextPrimary)
-                        OutlinedTextField(
-                            value = startMinText,
-                            onValueChange = { if (it.length <= 2) startMinText = it },
-                            label = { Text("MM (0-59)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f).testTag("input_start_mm")
-                        )
-                    }
-
-                    // Hora Fin
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("Hora Fin:", modifier = Modifier.width(90.dp), color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
-                        OutlinedTextField(
-                            value = endHourText,
-                            onValueChange = { if (it.length <= 2) endHourText = it },
-                            label = { Text("HH (0-23)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f).testTag("input_end_hh")
-                        )
-                        Text(":", style = MaterialTheme.typography.titleLarge, color = TextPrimary)
-                        OutlinedTextField(
-                            value = endMinText,
-                            onValueChange = { if (it.length <= 2) endMinText = it },
-                            label = { Text("MM (0-59)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f).testTag("input_end_mm")
-                        )
-                    }
-                }
-            }
-        }
-
-        // Resumen Visual Automático del Complemento
+        // Switching Summary
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -485,13 +861,38 @@ fun ScheduleSetupScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Esquema de Conmutación Resultante:",
+                        text = "Switching Schedule Summary:",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
 
-                    // Card 1: Red TCP Apagada / Wi-Fi ON
+                    // Operating Days
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = DarkSurface.copy(alpha = 0.6f),
+                        border = BorderStroke(1.dp, DarkBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = TechTealSecondary, modifier = Modifier.size(18.dp))
+                            Column {
+                                Text("Operating Days:", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text(
+                                    text = daysFormatted,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selectedDays.isEmpty()) StatusError else TextPrimary
+                                )
+                            }
+                        }
+                    }
+
+                    // Card 1: Wi-Fi ON / TCP OFF
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = CyberCyanPrimary.copy(alpha = 0.12f),
@@ -505,7 +906,7 @@ fun ScheduleSetupScreen(
                         ) {
                             Icon(Icons.Default.Wifi, contentDescription = null, tint = CyberCyanPrimary)
                             Column {
-                                Text("1. Red TCP APAGADA / Wi-Fi ACTIVO (Configurado)", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text("Wi-Fi ON", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                                 Text(
                                     text = previewOffStr,
                                     style = MaterialTheme.typography.bodyMedium,
@@ -516,7 +917,7 @@ fun ScheduleSetupScreen(
                         }
                     }
 
-                    // Card 2: Red TCP Encendida (Complemento Automático con Red, Clave y Puerto)
+                    // Card 2: TCP ON / Wi-Fi OFF
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = TechTealSecondary.copy(alpha = 0.12f),
@@ -530,7 +931,7 @@ fun ScheduleSetupScreen(
                             ) {
                                 Icon(Icons.Default.CellWifi, contentDescription = null, tint = TechTealSecondary)
                                 Column {
-                                    Text("2. Red TCP ENCENDIDA / Wi-Fi APAGADO (Complemento)", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                    Text("TCP Mesh ON", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                                     Text(
                                         text = previewTcpOnStr,
                                         style = MaterialTheme.typography.bodyMedium,
@@ -540,7 +941,7 @@ fun ScheduleSetupScreen(
                                 }
                             }
 
-                            // Datos de Acceso a la Red y Puerto
+                            // Network credentials badge
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = DarkSurface.copy(alpha = 0.6f),
@@ -558,13 +959,13 @@ fun ScheduleSetupScreen(
                                         color = CyberCyanPrimary
                                     )
                                     Text(
-                                        text = "Clave: ${customPassText.ifEmpty { "MeshPassword123" }}",
+                                        text = "Pass: ${customPassText.ifEmpty { "MeshPassword123" }}",
                                         style = MaterialTheme.typography.labelSmall,
                                         fontFamily = FontFamily.Monospace,
                                         color = TextSecondary
                                     )
                                     Text(
-                                        text = "Puerto: $portNumber",
+                                        text = "Port: $portNumber",
                                         style = MaterialTheme.typography.labelSmall,
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.Bold,
@@ -578,17 +979,18 @@ fun ScheduleSetupScreen(
             }
         }
 
-        // Botón Guardar y Avanzar
+        // Save & Continue Button
         item {
             Button(
                 onClick = {
                     val finalSsid = if (customSsidText.trim().isNotEmpty()) customSsidText.trim() else "Direct-Mesh-Master"
                     val finalPass = if (customPassText.trim().isNotEmpty()) customPassText.trim() else "MeshPassword123"
 
-                    scheduleManager.setInvertedSchedule(sH, sM, eH, eM)
+                    scheduleManager.setActiveDays(selectedDays.map { java.lang.Integer.valueOf(it) })
+                    scheduleManager.setInvertedSchedule(startHour, startMinute, endHour, endMinute)
                     scheduleManager.updateNetworkCredentials(finalSsid, finalPass, portNumber)
 
-                    Toast.makeText(context, "Configuración y Red Fija guardadas", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Schedule & days saved", Toast.LENGTH_SHORT).show()
                     onScheduleSaved()
                 },
                 colors = ButtonDefaults.buttonColors(
@@ -604,7 +1006,7 @@ fun ScheduleSetupScreen(
                 Icon(Icons.Default.Check, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Guardar y Pasar a Gestión TCP",
+                    text = "Save & Continue",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp
                 )
@@ -648,43 +1050,81 @@ fun TcpManagementScreen(
             .testTag("tcp_management_page"),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Banner de Horario Activo
+        // Active Schedule Banner
         item {
+            val currentCalendarDay = remember { Calendar.getInstance().get(Calendar.DAY_OF_WEEK) }
+            val isTodayActive = scheduleConfig.isDayActive(currentCalendarDay)
+            val todayName = ScheduleConfig.getDayFullName(currentCalendarDay)
+
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, TechTealSecondary.copy(alpha = 0.4f)),
+                border = BorderStroke(1.dp, if (isTodayActive) TechTealSecondary.copy(alpha = 0.4f) else StatusError.copy(alpha = 0.4f)),
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.AccessTime,
+                                contentDescription = null,
+                                tint = TechTealSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                "Schedule Status",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isTodayActive) StatusActive.copy(alpha = 0.15f) else StatusError.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, if (isTodayActive) StatusActive.copy(alpha = 0.4f) else StatusError.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = if (isTodayActive) "Today ($todayName): Active" else "Today ($todayName): Inactive",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isTodayActive) StatusActive else StatusError,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(
-                            Icons.Default.AccessTime,
-                            contentDescription = null,
-                            tint = TechTealSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = TechTealSecondary, modifier = Modifier.size(14.dp))
                         Text(
-                            "Horario de Conmutación Activo",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
+                            text = "Days: ${scheduleConfig.activeDaysFormatted}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
                         )
                     }
+
                     Text(
-                        text = "Wi-Fi ON (TCP Apagada): ${scheduleConfig.wifiScheduleFormatted}",
+                        text = "WiFi ON: ${scheduleConfig.wifiScheduleFormatted}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = CyberCyanPrimary
                     )
                     Text(
-                        text = "Red TCP ON (Complemento): ${scheduleConfig.hotspotScheduleFormatted}",
+                        text = "TCP ON: ${scheduleConfig.hotspotScheduleFormatted}",
                         style = MaterialTheme.typography.bodySmall,
                         color = TechTealSecondary
                     )
@@ -692,7 +1132,121 @@ fun TcpManagementScreen(
             }
         }
 
-        // Estado del Servidor TCP y Credenciales de Red Local
+        // Wi-Fi Hotspot Radio Status Card
+        item {
+            val isHotspotRunning = hotspotInfo.isRunning
+            val hotspotState = hotspotInfo.state
+            val statusColor = when (hotspotState) {
+                HotspotInfo.State.RUNNING -> StatusActive
+                HotspotInfo.State.STARTING -> StatusWarning
+                else -> StatusError
+            }
+            val statusLabel = when (hotspotState) {
+                HotspotInfo.State.RUNNING -> "Broadcasting (Active)"
+                HotspotInfo.State.STARTING -> "Starting SoftAP..."
+                HotspotInfo.State.FAILED -> "Failed: ${hotspotInfo.errorMessage.ifEmpty { "Error" }}"
+                HotspotInfo.State.DISABLED -> "Stopped / Timed Out"
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, if (isHotspotRunning) StatusActive.copy(alpha = 0.5f) else StatusError.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.WifiTethering, contentDescription = null, tint = statusColor, modifier = Modifier.size(20.dp))
+                            Column {
+                                Text("Wi-Fi Hotspot Radio (SoftAP)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                Text("Physical Wi-Fi Access Point", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = statusColor.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, statusColor.copy(alpha = 0.5f))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(statusColor)
+                                )
+                                Text(
+                                    text = statusLabel,
+                                    color = statusColor,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+
+                    if (!isHotspotRunning) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = StatusError.copy(alpha = 0.10f),
+                            border = BorderStroke(1.dp, StatusError.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Warning, contentDescription = null, tint = StatusError, modifier = Modifier.size(18.dp))
+                                Text(
+                                    text = "Wi-Fi radio is not broadcasting. Other smartphones/clients will NOT see this network until the Hotspot is started.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = StatusError
+                                )
+                            }
+                        }
+                    }
+
+                    // Button to restart Hotspot
+                    Button(
+                        onClick = {
+                            try {
+                                val intent = Intent(context, PersistentWifiTcpService::class.java).apply {
+                                    action = PersistentWifiTcpService.ACTION_CREATE_HOTSPOT
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    context.startForegroundService(intent)
+                                } else {
+                                    context.startService(intent)
+                                }
+                                Toast.makeText(context, "Restarting Wi-Fi Hotspot...", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isHotspotRunning) DarkSurfaceVariant else CyberCyanPrimary,
+                            contentColor = if (isHotspotRunning) TextPrimary else CyberCyanOnPrimary
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("restart_hotspot_button")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (isHotspotRunning) "Reboot Hotspot Radio" else "Start Wi-Fi Hotspot Now", fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+
+        // TCP Server Status & Fixed Local Network Credentials
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -700,32 +1254,43 @@ fun TcpManagementScreen(
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    // Estado Servidor
+                    // TCP Server Status with LED indicator
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text("Servidor Socket TCP", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            Text("Escuchando peticiones de nodos en red local", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                            Text("TCP Socket Server", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            Text("Socket listening on port $serverPort", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                         }
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isServerRunning) StatusActive.copy(alpha = 0.15f) else TextMuted.copy(alpha = 0.15f),
-                            border = BorderStroke(1.dp, if (isServerRunning) StatusActive.copy(alpha = 0.5f) else TextMuted.copy(alpha = 0.5f))
+                            color = if (isServerRunning) StatusActive.copy(alpha = 0.15f) else StatusError.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, if (isServerRunning) StatusActive.copy(alpha = 0.5f) else StatusError.copy(alpha = 0.5f))
                         ) {
-                            Text(
-                                text = if (isServerRunning) "ACTIVO" else "DETENIDO",
-                                color = if (isServerRunning) StatusActive else TextMuted,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isServerRunning) StatusActive else StatusError)
+                                )
+                                Text(
+                                    text = if (isServerRunning) "Active" else "Inactive",
+                                    color = if (isServerRunning) StatusActive else StatusError,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
                         }
                     }
 
-                    // Panel de Datos de Conexión de la Red Local y Socket TCP
+                    // Connection Details Panel
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = DarkSurfaceVariant,
@@ -737,9 +1302,9 @@ fun TcpManagementScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(Icons.Default.WifiTethering, contentDescription = null, tint = CyberCyanPrimary, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.Sensors, contentDescription = null, tint = CyberCyanPrimary, modifier = Modifier.size(18.dp))
                                 Text(
-                                    text = "Datos de Conexión para Nodos / Clientes",
+                                    text = "Client Connection Details",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = CyberCyanPrimary
@@ -748,7 +1313,7 @@ fun TcpManagementScreen(
 
                             HorizontalDivider(color = DarkBorder, thickness = 0.8.dp)
 
-                            // Nombre de Red (SSID)
+                            // Network SSID
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -756,19 +1321,19 @@ fun TcpManagementScreen(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Icon(Icons.Default.Wifi, contentDescription = null, tint = CyberCyanPrimary, modifier = Modifier.size(16.dp))
-                                    Text("Nombre Red (SSID):", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                                    Text("SSID:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                                 }
                                 Text(
-                                    text = networkSsid,
+                                    text = if (hotspotInfo.isRunning) networkSsid else "$networkSsid (Radio Off)",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    color = CyberCyanPrimary,
+                                    color = if (hotspotInfo.isRunning) CyberCyanPrimary else StatusError,
                                     modifier = Modifier.testTag("tcp_network_ssid_value")
                                 )
                             }
 
-                            // Contraseña de Red
+                            // Passphrase
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -776,7 +1341,7 @@ fun TcpManagementScreen(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Icon(Icons.Default.VpnKey, contentDescription = null, tint = TechTealSecondary, modifier = Modifier.size(16.dp))
-                                    Text("Contraseña Red:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                                    Text("Password:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                                 }
                                 Text(
                                     text = networkPass,
@@ -788,7 +1353,7 @@ fun TcpManagementScreen(
                                 )
                             }
 
-                            // Puerto de Escucha TCP
+                            // TCP Port
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -796,7 +1361,7 @@ fun TcpManagementScreen(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Icon(Icons.Default.Sensors, contentDescription = null, tint = StatusActive, modifier = Modifier.size(16.dp))
-                                    Text("Puerto Socket TCP:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                                    Text("TCP Port:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                                 }
                                 Text(
                                     text = "$serverPort",
@@ -808,7 +1373,7 @@ fun TcpManagementScreen(
                                 )
                             }
 
-                            // IP del Nodo Servidor
+                            // Server IP
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -816,7 +1381,7 @@ fun TcpManagementScreen(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Icon(Icons.Default.Router, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
-                                    Text("IP Nodo Servidor:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                                    Text("Server IP:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                                 }
                                 Text(
                                     text = displayIp,
@@ -828,13 +1393,13 @@ fun TcpManagementScreen(
                                 )
                             }
 
-                            // Botón de Copiar Credenciales y Puerto
+                            // Copy Credentials Button
                             OutlinedButton(
                                 onClick = {
-                                    val clipData = "Red Wi-Fi: $networkSsid\nClave: $networkPass\nIP: $displayIp\nPuerto TCP: $serverPort"
+                                    val clipData = "SSID: $networkSsid\nPassword: $networkPass\nIP: $displayIp\nTCP Port: $serverPort"
                                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    clipboard?.setPrimaryClip(ClipData.newPlainText("Credenciales Red TCP", clipData))
-                                    Toast.makeText(context, "Credenciales de Red y Puerto copiados al portapapeles", Toast.LENGTH_SHORT).show()
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("TCP Mesh Credentials", clipData))
+                                    Toast.makeText(context, "Credentials copied to clipboard", Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -845,12 +1410,12 @@ fun TcpManagementScreen(
                             ) {
                                 Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Copiar Nombre, Clave y Puerto", fontSize = 13.sp)
+                                Text("Copy Credentials", fontSize = 13.sp)
                             }
                         }
                     }
 
-                    // Métricas de Tráfico
+                    // Traffic Metrics
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -861,7 +1426,7 @@ fun TcpManagementScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("Enviados", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text("Sent", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                                 Text("$packetsSent", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = CyberCyanPrimary)
                             }
                         }
@@ -871,7 +1436,7 @@ fun TcpManagementScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("Recibidos", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text("Received", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                                 Text("$packetsReceived", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TechTealSecondary)
                             }
                         }
@@ -881,7 +1446,7 @@ fun TcpManagementScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Column(modifier = Modifier.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("Nodos", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text("Nodes", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                                 Text("${connectedClients.size}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = StatusActive)
                             }
                         }
@@ -890,7 +1455,7 @@ fun TcpManagementScreen(
             }
         }
 
-        // Envío de Mensajes TCP
+        // Send TCP Broadcast Message
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -899,7 +1464,7 @@ fun TcpManagementScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Transmitir Mensaje TCP",
+                        text = "Broadcast TCP Message",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
@@ -908,7 +1473,7 @@ fun TcpManagementScreen(
                     OutlinedTextField(
                         value = messageText,
                         onValueChange = { messageText = it },
-                        placeholder = { Text("Escribe un mensaje para difundir en la red TCP...") },
+                        placeholder = { Text("Enter message to broadcast...") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("tcp_message_input")
                     )
@@ -926,9 +1491,9 @@ fun TcpManagementScreen(
                                     } else {
                                         context.startService(intent)
                                     }
-                                    Toast.makeText(context, "Mensaje enviado a la red", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Message sent to mesh", Toast.LENGTH_SHORT).show()
                                 } catch (e: Exception) {
-                                    Toast.makeText(context, "Servicio en segundo plano no disponible: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Service error: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
                                 messageText = ""
                             }
@@ -941,13 +1506,13 @@ fun TcpManagementScreen(
                     ) {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Difundir en la Red TCP")
+                        Text("Broadcast Message")
                     }
                 }
             }
         }
 
-        // Nodos Conectados
+        // Connected Nodes
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -956,7 +1521,7 @@ fun TcpManagementScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Nodos TCP Conectados (${connectedClients.size})",
+                        text = "Connected Nodes (${connectedClients.size})",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
@@ -965,7 +1530,7 @@ fun TcpManagementScreen(
 
                     if (connectedClients.isEmpty()) {
                         Text(
-                            text = "Esperando que otros dispositivos se conecten a la red...",
+                            text = "Waiting for client nodes to connect...",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted
                         )
@@ -985,7 +1550,7 @@ fun TcpManagementScreen(
                                         Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(StatusActive))
                                         Text(client.ipAddress, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = TextPrimary)
                                     }
-                                    Text("Puerto ${client.port}", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                                    Text("Port ${client.port}", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                                 }
                             }
                         }
@@ -994,7 +1559,12 @@ fun TcpManagementScreen(
             }
         }
 
-        // Registro de Mensajes y Tráfico
+        // System OS & Keep-Alive Settings Card
+        item {
+            KeepAliveSettingsCard(context = context)
+        }
+
+        // Traffic and Message Logs
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -1003,7 +1573,7 @@ fun TcpManagementScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Registro de Mensajes Recibidos",
+                        text = "Received Messages Log",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
@@ -1013,7 +1583,7 @@ fun TcpManagementScreen(
                     val tcpLogs = logs.filter { it.tag.contains("TCP", ignoreCase = true) || it.tag.contains("Mesh", ignoreCase = true) }.takeLast(15)
                     if (tcpLogs.isEmpty()) {
                         Text(
-                            text = "No se han recibido paquetes TCP todavía.",
+                            text = "No TCP packets received yet.",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted
                         )
@@ -1059,6 +1629,161 @@ private fun startPersistentService(context: Context) {
             context.startService(intent)
         }
     } catch (e: Exception) {
-        AppLogger.getInstance().e("MainActivity", "Error iniciando servicio en segundo plano: " + e.message)
+        AppLogger.getInstance().e("MainActivity", "Error starting background service: " + e.message)
+    }
+}
+
+@Composable
+fun KeepAliveSettingsCard(context: Context) {
+    val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as? PowerManager }
+    val isIgnoringBattery = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
+        } else true
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        border = BorderStroke(1.dp, DarkBorder),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.BatteryChargingFull, contentDescription = null, tint = StatusActive)
+                Text(
+                    text = "OS Battery Exemption & Keep-Alive",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+
+            Text(
+                text = "Android OS actively restricts apps flagged for high background battery usage or idle hotspot timeouts. Setting the app to 'Unrestricted' prevents Android from killing the mesh service or turning off the Wi-Fi radio.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+
+            // Status Badges Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isIgnoringBattery) StatusActive.copy(alpha = 0.12f) else StatusWarning.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, if (isIgnoringBattery) StatusActive.copy(alpha = 0.4f) else StatusWarning.copy(alpha = 0.4f)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text("Battery Policy", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                        Text(
+                            text = if (isIgnoringBattery) "Unrestricted (Exempt)" else "Optimized / Restricted",
+                            fontWeight = FontWeight.Bold,
+                            color = if (isIgnoringBattery) StatusActive else StatusWarning,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = StatusActive.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, StatusActive.copy(alpha = 0.4f)),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text("Watchdog Protection", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                        Text(
+                            text = "Auto-Revive & Lock ON",
+                            fontWeight = FontWeight.Bold,
+                            color = StatusActive,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            // 1. Button to set App Battery Usage to "Unrestricted" (Android 12/13/14+)
+            OutlinedButton(
+                onClick = {
+                    var opened = false
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        try {
+                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                            opened = true
+                        } catch (_: Exception) {}
+                    }
+                    if (!opened) {
+                        try {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Could not open app settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().testTag("exempt_battery_button"),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = CyberCyanPrimary)
+            ) {
+                Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Exempt from Battery Saver / High Usage Kill", fontSize = 13.sp)
+            }
+
+            // 2. Button to open App Info / Battery Details directly
+            OutlinedButton(
+                onClick = {
+                    try {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Could not open App Info", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().testTag("open_app_info_battery"),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("App Info -> Battery -> Select 'Unrestricted'", fontSize = 13.sp)
+            }
+
+            // 3. Button to open Hotspot Tethering settings
+            OutlinedButton(
+                onClick = {
+                    try {
+                        val tetherIntent = Intent().apply {
+                            setClassName("com.android.settings", "com.android.settings.TetherSettings")
+                        }
+                        context.startActivity(tetherIntent)
+                    } catch (e1: Exception) {
+                        try {
+                            val wirelessIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS)
+                            context.startActivity(wirelessIntent)
+                        } catch (e2: Exception) {
+                            val wifiIntent = Intent(Settings.ACTION_WIFI_SETTINGS)
+                            context.startActivity(wifiIntent)
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().testTag("open_hotspot_settings_button"),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TechTealSecondary)
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Open Hotspot Timeout Settings", fontSize = 13.sp)
+            }
+        }
     }
 }

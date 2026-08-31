@@ -16,6 +16,33 @@ import java.util.List;
 public class NetworkUtils {
 
     /**
+     * Checks whether a physical or virtual SoftAP interface (ap0, wlan, swlan, p2p, softap)
+     * is up and has an active non-loopback IPv4 address assigned.
+     */
+    public static boolean isLocalApInterfaceUp() {
+        try {
+            List<NetworkInterface> interfaces = Collections.list(NetworkInterface.getNetworkInterfaces());
+            for (NetworkInterface intf : interfaces) {
+                if (!intf.isUp()) continue;
+                String name = intf.getName().toLowerCase();
+                if (name.contains("ap") || name.contains("wlan") || name.contains("swlan") || name.contains("p2p")) {
+                    Enumeration<InetAddress> addresses = intf.getInetAddresses();
+                    while (addresses.hasMoreElements()) {
+                        InetAddress addr = addresses.nextElement();
+                        if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
+                            String host = addr.getHostAddress();
+                            if (host != null && !host.isEmpty() && !host.equals("127.0.0.1") && !host.equals("0.0.0.0")) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    /**
      * Resolves the local IPv4 address across active network interfaces (wlan, ap, p2p, eth).
      */
     public static String getLocalIpAddress() {

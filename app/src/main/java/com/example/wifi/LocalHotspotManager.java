@@ -35,6 +35,8 @@ public class LocalHotspotManager {
     private long lastFailureTimestamp = 0;
     private String lastFailureReason = "";
     private boolean isStarting = false;
+    private long startingTimestamp = 0;
+    private long hotspotStartTime = 0;
 
     // Configured desired fixed credentials
     private String preferredSsid = "Direct-Mesh-Master";
@@ -93,11 +95,33 @@ public class LocalHotspotManager {
     }
 
     public boolean isHotspotActive() {
-        return currentHotspotInfo.isRunning() && (hotspotReservation != null || currentHotspotInfo.getIpAddress().length() > 0);
+        if (currentHotspotInfo != null && currentHotspotInfo.isRunning()) {
+            if (hotspotReservation != null || isLegacyApActive()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isLegacyApActive() {
+        if (wifiManager == null) return false;
+        try {
+            Method method = wifiManager.getClass().getMethod("isWifiApEnabled");
+            return (boolean) method.invoke(wifiManager);
+        } catch (Throwable ignore) {
+            return false;
+        }
     }
 
     public boolean isStarting() {
-        return isStarting || currentHotspotInfo.getState() == HotspotInfo.State.STARTING;
+        if (isStarting) {
+            if (System.currentTimeMillis() - startingTimestamp > 12000) {
+                isStarting = false;
+                return false;
+            }
+            return true;
+        }
+        return currentHotspotInfo != null && currentHotspotInfo.getState() == HotspotInfo.State.STARTING;
     }
 
     public boolean hasRecentFailure(long windowMs) {
@@ -106,6 +130,69 @@ public class LocalHotspotManager {
 
     public String getLastFailureReason() {
         return lastFailureReason;
+    }
+
+    /**
+     * Autonomous Watchdog probe called periodically by the background scheduler.
+     * 1. Detects silent drops in hardware AP interface.
+     * 2. Proactively refreshes SoftAP before Android's 15-20 min idle timeout triggers.
+     * 3. Automatically spins up the hotspot if stopped or failed.
+     */
+    public synchronized void checkAndReviveIfNeeded(int connectedClientsCount) {
+        if (isStarting()) {
+            return;
+        }
+
+        // 1. If currently in RUNNING state:
+        if (isHotspotActive()) {
+            long activeDuration = System.currentTimeMillis() - hotspotStartTime;
+
+            // Check if hardware interface silently disappeared
+            if (activeDuration > 20000 && !NetworkUtils.isLocalApInterfaceUp()) {
+                logger.w(TAG, "[Watchdog] Interfaz física de SoftAP desapareció en el hardware. Reiniciando Hotspot...");
+                forceRestartHotspot();
+                return;
+            }
+
+            // Proactive SoftAP Refresh: Android OS tears down LocalOnlyHotspot after 10-20 min of no clients.
+            // If running for > 8 minutes with 0 connected peers, refresh cleanly to reset OS idle timer.
+            if (connectedClientsCount == 0 && activeDuration > 8 * 60 * 1000) {
+                logger.i(TAG, "[Watchdog Keep-Alive] Refresco proactivo de Red Local (previene timeout de 20 min de Android)...");
+                forceRestartHotspot();
+                return;
+            }
+            return;
+        }
+
+        // 2. If NOT running, start hotspot automatically (respecting brief failure cooldown)
+        if (!hasRecentFailure(5000)) {
+            logger.i(TAG, "[Watchdog] Red Local Wi-Fi inactiva. Levantando automáticamente...");
+            startLocalHotspot();
+        }
+    }
+
+    /**
+     * Forces a clean tear-down of any lingering OS reservation and initiates a fresh Hotspot start.
+     */
+    public synchronized void forceRestartHotspot() {
+        logger.i(TAG, "Ejecutando reinicio completo forzado de la Red Local Wi-Fi...");
+        isStarting = false;
+        if (hotspotReservation != null) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    hotspotReservation.close();
+                }
+            } catch (Throwable ignored) {}
+            hotspotReservation = null;
+        }
+
+        try {
+            Method method = wifiManager.getClass().getMethod("setWifiApEnabled", WifiConfiguration.class, boolean.class);
+            method.invoke(wifiManager, null, false);
+        } catch (Throwable ignored) {}
+
+        updateState(HotspotInfo.disabled());
+        mainHandler.postDelayed(this::startLocalHotspot, 350);
     }
 
     /**
@@ -129,7 +216,18 @@ public class LocalHotspotManager {
             return;
         }
 
+        // Clean up any stale reservation if it existed
+        if (hotspotReservation != null) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    hotspotReservation.close();
+                }
+            } catch (Throwable ignore) {}
+            hotspotReservation = null;
+        }
+
         isStarting = true;
+        startingTimestamp = System.currentTimeMillis();
         logger.i(TAG, "Iniciando creación de Red Local Wi-Fi (SSID deseado: " + preferredSsid + ")...");
         updateState(HotspotInfo.starting());
 
@@ -211,6 +309,7 @@ public class LocalHotspotManager {
                 super.onStarted(reservation);
                 try {
                     isStarting = false;
+                    hotspotStartTime = System.currentTimeMillis();
                     lastFailureTimestamp = 0;
                     lastFailureReason = "";
                     hotspotReservation = reservation;
@@ -266,11 +365,12 @@ public class LocalHotspotManager {
                 super.onStopped();
                 try {
                     isStarting = false;
-                    logger.i(TAG, "Red Wi-Fi Local DETENIDA.");
+                    hotspotStartTime = 0;
+                    logger.w(TAG, "Local Wi-Fi Hotspot was STOPPED by system (idle timeout or Wi-Fi sleep). Watchdog will recover.");
                     hotspotReservation = null;
                     updateState(HotspotInfo.disabled());
                 } catch (Throwable t) {
-                    logger.w(TAG, "Error en onStopped: " + t.getMessage());
+                    logger.w(TAG, "Error in onStopped: " + t.getMessage());
                 }
             }
 
@@ -279,39 +379,32 @@ public class LocalHotspotManager {
                 super.onFailed(reason);
                 try {
                     isStarting = false;
+                    hotspotStartTime = 0;
                     lastFailureTimestamp = System.currentTimeMillis();
                     String reasonText;
                     switch (reason) {
                         case ERROR_NO_CHANNEL:
-                            reasonText = "No hay canales Wi-Fi disponibles para SoftAP";
+                            reasonText = "No Wi-Fi channels available for SoftAP";
                             break;
                         case ERROR_GENERIC:
-                            reasonText = "Hardware SoftAP no disponible en este entorno o Wi-Fi ocupado";
+                            reasonText = "SoftAP hardware busy or temporarily unavailable";
                             break;
                         case ERROR_INCOMPATIBLE_MODE:
-                            reasonText = "Modo Wi-Fi incompatible o punto de acceso en uso";
+                            reasonText = "Wi-Fi mode incompatible or AP in use";
                             break;
                         case ERROR_TETHERING_DISALLOWED:
-                            reasonText = "Punto de acceso restringido por política del sistema";
+                            reasonText = "Tethering restricted by system policy";
                             break;
                         default:
-                            reasonText = "Error de punto de acceso (código " + reason + ")";
+                            reasonText = "Hotspot error (code " + reason + ")";
                             break;
                     }
                     lastFailureReason = reasonText;
-                    logger.w(TAG, "Aviso Punto de Acceso Local: " + reasonText);
+                    logger.w(TAG, "Local Hotspot Failed: " + reasonText);
                     hotspotReservation = null;
-
-                    // Fallback to local network IP so TCP Mesh service continues working
-                    String fallbackIp = NetworkUtils.getLocalIpAddress();
-                    if (fallbackIp != null && !fallbackIp.isEmpty() && !fallbackIp.equals("127.0.0.1")) {
-                        logger.i(TAG, "Utilizando interfaz de red activa como canal de comunicación Mesh: " + fallbackIp);
-                        updateState(HotspotInfo.running(preferredSsid, preferredPassphrase, fallbackIp));
-                    } else {
-                        updateState(HotspotInfo.failed(reasonText));
-                    }
+                    updateState(HotspotInfo.failed(reasonText));
                 } catch (Throwable t) {
-                    logger.w(TAG, "Error en onFailed: " + t.getMessage());
+                    logger.w(TAG, "Error in onFailed: " + t.getMessage());
                 }
             }
         };

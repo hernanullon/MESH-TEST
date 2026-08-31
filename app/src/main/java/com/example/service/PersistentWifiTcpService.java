@@ -74,8 +74,9 @@ public class PersistentWifiTcpService extends Service {
             // Initialize Schedule Manager with persistent preferences
             scheduleManager.init(this);
 
-            // Acquire WakeLock to keep CPU powered in background
+            // Acquire WakeLock and WifiLock to keep CPU and Wi-Fi chip powered in background
             acquireWakeLock();
+            acquireWifiLock();
 
             // Initialize Core Subsystems in Java
             wifiController = new WifiController(this);
@@ -87,8 +88,9 @@ public class PersistentWifiTcpService extends Service {
             // Start monitoring Wi-Fi hardware broadcasts
             wifiController.startMonitoring();
 
-            // Start background scheduler loop (checks every 5 seconds)
+            // Start background scheduler loop and alarm watchdog
             startAutonomousSchedulerLoop();
+            scheduleNextAlarmWatchdog();
 
             // Update initial state
             stateManager.setServiceRunning(true);
@@ -124,6 +126,61 @@ public class PersistentWifiTcpService extends Service {
         } catch (Exception e) {
             logger.w(TAG, "WakeLock error: " + e.getMessage());
         }
+    }
+
+    private void acquireWifiLock() {
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "WiFiTcpMesh::WifiLock");
+                } else {
+                    wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "WiFiTcpMesh::WifiLock");
+                }
+                wifiLock.setReferenceCounted(false);
+                wifiLock.acquire();
+                logger.i(TAG, "High-Performance WifiLock acquired (prevents Wi-Fi radio sleep).");
+            }
+        } catch (Exception e) {
+            logger.w(TAG, "WifiLock error: " + e.getMessage());
+        }
+    }
+
+    private void scheduleNextAlarmWatchdog() {
+        try {
+            android.app.AlarmManager alarmManager = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            if (alarmManager != null) {
+                Intent intent = new Intent(this, PersistentWifiTcpService.class);
+                intent.setAction(ACTION_EVALUATE_SCHEDULE);
+                PendingIntent pi = PendingIntent.getService(
+                        this, 999, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                );
+                long triggerAtMillis = System.currentTimeMillis() + 30000; // 30 seconds
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pi);
+                } else {
+                    alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pi);
+                }
+            }
+        } catch (Throwable ignore) {}
+    }
+
+    private void cancelAlarmWatchdog() {
+        try {
+            android.app.AlarmManager alarmManager = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
+            if (alarmManager != null) {
+                Intent intent = new Intent(this, PersistentWifiTcpService.class);
+                intent.setAction(ACTION_EVALUATE_SCHEDULE);
+                PendingIntent pi = PendingIntent.getService(
+                        this, 999, intent,
+                        PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE
+                );
+                if (pi != null) {
+                    alarmManager.cancel(pi);
+                }
+            }
+        } catch (Throwable ignore) {}
     }
 
     private void setupListeners() {
@@ -197,7 +254,7 @@ public class PersistentWifiTcpService extends Service {
                 break;
 
             case ACTION_CREATE_HOTSPOT:
-                hotspotManager.startLocalHotspot();
+                hotspotManager.forceRestartHotspot();
                 break;
 
             case ACTION_STOP_HOTSPOT:
@@ -226,9 +283,11 @@ public class PersistentWifiTcpService extends Service {
 
             case ACTION_EVALUATE_SCHEDULE:
                 scheduleManager.evaluateAndApply(wifiController, hotspotManager, tcpConnectionManager);
+                scheduleNextAlarmWatchdog();
                 break;
 
             case ACTION_STOP:
+                cancelAlarmWatchdog();
                 stopSelf();
                 return START_NOT_STICKY;
         }
@@ -314,6 +373,7 @@ public class PersistentWifiTcpService extends Service {
         super.onDestroy();
         logger.w(TAG, "Persistent Service onDestroy - Shutting down mesh background components.");
 
+        cancelAlarmWatchdog();
         stateManager.setServiceRunning(false);
 
         if (schedulerExecutor != null && !schedulerExecutor.isShutdown()) {
