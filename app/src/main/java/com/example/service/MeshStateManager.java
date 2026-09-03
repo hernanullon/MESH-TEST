@@ -33,6 +33,7 @@ public class MeshStateManager {
     private long packetsReceivedCount = 0;
     private long totalBytesTransferred = 0;
     private long serviceStartedTimestamp = 0;
+    private com.example.model.telemetry.UnifiedTelemetrySnapshot latestTelemetrySnapshot = com.example.model.telemetry.UnifiedTelemetrySnapshot.empty("NODE-01");
 
     private final List<StateChangeListener> listeners = new CopyOnWriteArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -184,5 +185,16 @@ public class MeshStateManager {
     public void setTotalBytesTransferred(long bytes) {
         this.totalBytesTransferred = bytes;
         notifyStateChanged();
+    }
+
+    public com.example.model.telemetry.UnifiedTelemetrySnapshot getLatestTelemetrySnapshot() {
+        return latestTelemetrySnapshot;
+    }
+
+    public void setLatestTelemetrySnapshot(com.example.model.telemetry.UnifiedTelemetrySnapshot snapshot) {
+        if (snapshot != null) {
+            this.latestTelemetrySnapshot = snapshot;
+            // Do NOT call notifyStateChanged() here to avoid continuous UI recompositions & high memory/CPU usage
+        }
     }
 }

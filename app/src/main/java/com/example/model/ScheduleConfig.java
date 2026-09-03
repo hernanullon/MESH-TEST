@@ -32,6 +32,32 @@ public class ScheduleConfig {
     private int offEndHour = 5;
     private int offEndMinute = 30;
 
+    // Configuration status
+    private boolean isConfigured = false;
+    private String deviceId = "device_001";
+
+    // Sampling Rates for Internal Sensors
+    private int locationIntervalSeconds = 1; // GPS / Location rate in seconds (min: 1)
+    private int inertialIntervalMs = 200;      // Inertial / IMU rate in milliseconds (min: 20)
+
+    // Hardware Relays & Vehicle Driver settings (ESP-01 / Telemetry)
+    private String ipDriver = "192.168.43.100";
+    private int batteryMin = 20;
+    private int batteryMax = 80;
+    private int tempMin = 15;
+    private int tempMax = 45;
+
+    // AMQP / RabbitMQ Cloud Sync & Telemetry Server Credentials (Moview Reference)
+    private String amqpHost = "143.106.8.17";
+    private int amqpPort = 5672;
+    private String amqpVirtualHost = "/";
+    private String amqpUsername = "guest";
+    private String amqpPassword = "guest";
+    private String amqpExchange = "amq.direct";
+    private String amqpRoutingKey = "unicamp.campinas.";
+    private String amqpQueue = "";
+    private boolean amqpSslEnabled = false;
+
     // Fixed Network Credentials for Mesh Nodes
     private String customSsid = "Direct-Mesh-Master";
     private String customPassphrase = "MeshPassword123";
@@ -102,6 +128,127 @@ public class ScheduleConfig {
             this.hotspotRanges.add(new TimeRange(0, 0, 23, 59, "TCP Network"));
         }
     }
+
+    public boolean isConfigured() { return isConfigured; }
+    public void setConfigured(boolean configured) { this.isConfigured = configured; }
+
+    public String getDeviceId() {
+        return (deviceId == null || deviceId.trim().isEmpty()) ? "device_001" : deviceId.trim();
+    }
+    public void setDeviceId(String deviceId) {
+        if (deviceId != null && !deviceId.trim().isEmpty()) {
+            this.deviceId = deviceId.trim();
+        }
+    }
+
+    public int getLocationIntervalSeconds() {
+        return Math.max(1, locationIntervalSeconds);
+    }
+    public void setLocationIntervalSeconds(int locationIntervalSeconds) {
+        this.locationIntervalSeconds = Math.max(1, locationIntervalSeconds);
+    }
+
+    public int getInertialIntervalMs() {
+        return Math.max(20, inertialIntervalMs);
+    }
+    public void setInertialIntervalMs(int inertialIntervalMs) {
+        this.inertialIntervalMs = Math.max(20, inertialIntervalMs);
+    }
+
+    public String getIpDriver() {
+        return (ipDriver == null || ipDriver.trim().isEmpty()) ? "192.168.43.100" : ipDriver.trim();
+    }
+    public void setIpDriver(String ipDriver) {
+        if (ipDriver != null && !ipDriver.trim().isEmpty()) {
+            this.ipDriver = ipDriver.trim();
+        }
+    }
+
+    public int getBatteryMin() { return batteryMin; }
+    public void setBatteryMin(int batteryMin) { this.batteryMin = Math.max(5, Math.min(batteryMin, 95)); }
+
+    public int getBatteryMax() { return batteryMax; }
+    public void setBatteryMax(int batteryMax) { this.batteryMax = Math.max(10, Math.min(batteryMax, 100)); }
+
+    public int getTempMin() { return tempMin; }
+    public void setTempMin(int tempMin) { this.tempMin = tempMin; }
+
+    public int getTempMax() { return tempMax; }
+    public void setTempMax(int tempMax) { this.tempMax = tempMax; }
+
+    // AMQP / RabbitMQ Getters & Setters
+    public String getAmqpHost() {
+        return (amqpHost == null || amqpHost.trim().isEmpty()) ? "143.106.8.17" : amqpHost.trim();
+    }
+    public void setAmqpHost(String amqpHost) {
+        if (amqpHost != null && !amqpHost.trim().isEmpty()) {
+            this.amqpHost = amqpHost.trim();
+        }
+    }
+
+    public int getAmqpPort() { return (amqpPort > 0 && amqpPort <= 65535) ? amqpPort : 5672; }
+    public void setAmqpPort(int amqpPort) {
+        if (amqpPort >= 1 && amqpPort <= 65535) {
+            this.amqpPort = amqpPort;
+        }
+    }
+
+    public String getAmqpVirtualHost() {
+        return (amqpVirtualHost == null || amqpVirtualHost.trim().isEmpty()) ? "/" : amqpVirtualHost.trim();
+    }
+    public void setAmqpVirtualHost(String amqpVirtualHost) {
+        if (amqpVirtualHost != null && !amqpVirtualHost.trim().isEmpty()) {
+            this.amqpVirtualHost = amqpVirtualHost.trim();
+        }
+    }
+
+    public String getAmqpUsername() {
+        return (amqpUsername == null || amqpUsername.trim().isEmpty()) ? "guest" : amqpUsername.trim();
+    }
+    public void setAmqpUsername(String amqpUsername) {
+        if (amqpUsername != null && !amqpUsername.trim().isEmpty()) {
+            this.amqpUsername = amqpUsername.trim();
+        }
+    }
+
+    public String getAmqpPassword() {
+        return (amqpPassword == null) ? "guest" : amqpPassword;
+    }
+    public void setAmqpPassword(String amqpPassword) {
+        if (amqpPassword != null) {
+            this.amqpPassword = amqpPassword;
+        }
+    }
+
+    public String getAmqpExchange() {
+        return (amqpExchange == null || amqpExchange.trim().isEmpty()) ? "amq.direct" : amqpExchange.trim();
+    }
+    public void setAmqpExchange(String amqpExchange) {
+        if (amqpExchange != null && !amqpExchange.trim().isEmpty()) {
+            this.amqpExchange = amqpExchange.trim();
+        }
+    }
+
+    public String getAmqpRoutingKey() {
+        return (amqpRoutingKey == null || amqpRoutingKey.trim().isEmpty()) ? "unicamp.campinas." : amqpRoutingKey.trim();
+    }
+    public void setAmqpRoutingKey(String amqpRoutingKey) {
+        if (amqpRoutingKey != null && !amqpRoutingKey.trim().isEmpty()) {
+            this.amqpRoutingKey = amqpRoutingKey.trim();
+        }
+    }
+
+    public String getAmqpQueue() {
+        return (amqpQueue == null) ? "" : amqpQueue.trim();
+    }
+    public void setAmqpQueue(String amqpQueue) {
+        if (amqpQueue != null) {
+            this.amqpQueue = amqpQueue.trim();
+        }
+    }
+
+    public boolean isAmqpSslEnabled() { return amqpSslEnabled; }
+    public void setAmqpSslEnabled(boolean amqpSslEnabled) { this.amqpSslEnabled = amqpSslEnabled; }
 
     public int getOffStartHour() { return offStartHour; }
     public int getOffStartMinute() { return offStartMinute; }
@@ -365,6 +512,24 @@ public class ScheduleConfig {
     public String toJson() {
         try {
             JSONObject root = new JSONObject();
+            root.put("isConfigured", isConfigured);
+            root.put("deviceId", deviceId);
+            root.put("locationIntervalSeconds", locationIntervalSeconds);
+            root.put("inertialIntervalMs", inertialIntervalMs);
+            root.put("ipDriver", ipDriver);
+            root.put("batteryMin", batteryMin);
+            root.put("batteryMax", batteryMax);
+            root.put("tempMin", tempMin);
+            root.put("tempMax", tempMax);
+            root.put("amqpHost", amqpHost);
+            root.put("amqpPort", amqpPort);
+            root.put("amqpVirtualHost", amqpVirtualHost);
+            root.put("amqpUsername", amqpUsername);
+            root.put("amqpPassword", amqpPassword);
+            root.put("amqpExchange", amqpExchange);
+            root.put("amqpRoutingKey", amqpRoutingKey);
+            root.put("amqpQueue", amqpQueue);
+            root.put("amqpSslEnabled", amqpSslEnabled);
             root.put("wifiScheduleEnabled", wifiScheduleEnabled);
             root.put("hotspotScheduleEnabled", hotspotScheduleEnabled);
             root.put("offStartHour", offStartHour);
@@ -407,6 +572,26 @@ public class ScheduleConfig {
 
         try {
             JSONObject root = new JSONObject(jsonStr);
+            config.setConfigured(root.optBoolean("isConfigured", false));
+            config.setDeviceId(root.optString("deviceId", "device_001"));
+            config.setLocationIntervalSeconds(root.optInt("locationIntervalSeconds", 1));
+            config.setInertialIntervalMs(root.optInt("inertialIntervalMs", 200));
+            config.setIpDriver(root.optString("ipDriver", "192.168.43.100"));
+            config.setBatteryMin(root.optInt("batteryMin", 20));
+            config.setBatteryMax(root.optInt("batteryMax", 80));
+            config.setTempMin(root.optInt("tempMin", 15));
+            config.setTempMax(root.optInt("tempMax", 45));
+
+            config.setAmqpHost(root.optString("amqpHost", "143.106.8.17"));
+            config.setAmqpPort(root.optInt("amqpPort", 5672));
+            config.setAmqpVirtualHost(root.optString("amqpVirtualHost", "/"));
+            config.setAmqpUsername(root.optString("amqpUsername", "guest"));
+            config.setAmqpPassword(root.optString("amqpPassword", "guest"));
+            config.setAmqpExchange(root.optString("amqpExchange", "amq.direct"));
+            config.setAmqpRoutingKey(root.optString("amqpRoutingKey", "unicamp.campinas."));
+            config.setAmqpQueue(root.optString("amqpQueue", ""));
+            config.setAmqpSslEnabled(root.optBoolean("amqpSslEnabled", false));
+
             config.setWifiScheduleEnabled(root.optBoolean("wifiScheduleEnabled", true));
             config.setHotspotScheduleEnabled(root.optBoolean("hotspotScheduleEnabled", true));
             int sH = root.optInt("offStartHour", root.optInt("hotspotStartHour", 4));

@@ -101,6 +101,80 @@ public class ScheduleManager {
         }
     }
 
+    public synchronized boolean isConfigured() {
+        return config != null && config.isConfigured();
+    }
+
+    public synchronized void setConfigured(boolean configured) {
+        if (config != null) {
+            config.setConfigured(configured);
+            saveToPreferences();
+            logger.s(TAG, "Estado de configuración inicial actualizado a: " + (configured ? "CONFIGURADO" : "PENDIENTE"));
+        }
+    }
+
+    public synchronized void resetConfiguration() {
+        if (prefs != null) {
+            prefs.edit().clear().apply();
+        }
+        this.config = new ScheduleConfig();
+        this.config.setConfigured(false);
+        this.lastAppliedWifiState = null;
+        this.lastAppliedHotspotState = null;
+        notifyScheduleChanged();
+        logger.w(TAG, "Configuración y preferencias restablecidas por completo (Modo Inicial).");
+    }
+
+    public synchronized void updateFullConfiguration(
+            String deviceId,
+            java.util.Collection<Integer> activeDays,
+            int offStartH, int offStartM, int offEndH, int offEndM,
+            String ssid, String passphrase, int port,
+            String ipDriver, int batteryMin, int batteryMax, int tempMin, int tempMax,
+            String amqpHost, int amqpPort, String amqpVirtualHost, String amqpUser, String amqpPass,
+            String amqpExchange, String amqpRoutingKey, String amqpQueue, boolean amqpSsl,
+            int locationIntervalSec, int inertialIntervalMs
+    ) {
+        if (config != null) {
+            config.setConfigured(true);
+            config.setDeviceId(deviceId);
+            config.setActiveDays(activeDays);
+            config.applyInvertedSchedule(offStartH, offStartM, offEndH, offEndM);
+            config.setCustomSsid(ssid);
+            config.setCustomPassphrase(passphrase);
+            config.setTcpPort(port);
+            config.setIpDriver(ipDriver);
+            config.setBatteryMin(batteryMin);
+            config.setBatteryMax(batteryMax);
+            config.setTempMin(tempMin);
+            config.setTempMax(tempMax);
+
+            config.setAmqpHost(amqpHost);
+            config.setAmqpPort(amqpPort);
+            config.setAmqpVirtualHost(amqpVirtualHost);
+            config.setAmqpUsername(amqpUser);
+            config.setAmqpPassword(amqpPass);
+            config.setAmqpExchange(amqpExchange);
+            config.setAmqpRoutingKey(amqpRoutingKey);
+            config.setAmqpQueue(amqpQueue);
+            config.setAmqpSslEnabled(amqpSsl);
+
+            config.setLocationIntervalSeconds(locationIntervalSec);
+            config.setInertialIntervalMs(inertialIntervalMs);
+
+            this.lastAppliedWifiState = null;
+            this.lastAppliedHotspotState = null;
+            saveToPreferences();
+            logger.s(TAG, "Global configuration saved. Device: " + config.getDeviceId()
+                    + " | Days: " + config.getActiveDaysFormatted()
+                    + " | Wi-Fi ON window: " + config.getConfiguredOffWindowFormatted()
+                    + " | SSID: " + config.getCustomSsid() + " | TCP Port: " + config.getTcpPort()
+                    + " | Location Rate: " + config.getLocationIntervalSeconds() + "s"
+                    + " | Inertial Rate: " + config.getInertialIntervalMs() + "ms"
+                    + " | AMQP Broker: " + config.getAmqpHost() + ":" + config.getAmqpPort());
+        }
+    }
+
     public synchronized void resetToDefaultSchedules() {
         this.config = new ScheduleConfig();
         saveToPreferences();

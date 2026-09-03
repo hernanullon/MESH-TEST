@@ -23,5 +23,6 @@ class MeshApplication : Application() {
         }
 
         Log.i("MeshApplication", "MeshApplication initialized successfully.")
+        com.example.data.local.TelemetryBufferRepository.getInstance(this)
     }
 }

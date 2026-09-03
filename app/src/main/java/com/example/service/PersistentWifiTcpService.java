@@ -53,22 +53,34 @@ public class PersistentWifiTcpService extends Service {
     private final MeshStateManager stateManager = MeshStateManager.getInstance();
     private final ScheduleManager scheduleManager = ScheduleManager.getInstance();
 
+    private static volatile PersistentWifiTcpService instance;
+
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
 
     private WifiController wifiController;
     private LocalHotspotManager hotspotManager;
     private TcpConnectionManager tcpConnectionManager;
+    private com.example.service.telemetry.TelemetryEngine telemetryEngine;
 
     private java.util.concurrent.ScheduledExecutorService schedulerExecutor;
+
+    public static PersistentWifiTcpService getInstance() {
+        return instance;
+    }
+
+    public com.example.service.telemetry.TelemetryEngine getTelemetryEngine() {
+        return telemetryEngine;
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         createNotificationChannel();
         startForegroundWithProperType();
 
-        logger.s(TAG, "Persistent Service onCreate - Initializing Autonomous Mesh Background Engine & Scheduler...");
+        logger.s(TAG, "Persistent Service onCreate - Initializing Autonomous Mesh & Base Telemetry Engine...");
 
         try {
             // Initialize Schedule Manager with persistent preferences
@@ -82,11 +94,15 @@ public class PersistentWifiTcpService extends Service {
             wifiController = new WifiController(this);
             hotspotManager = new LocalHotspotManager(this);
             tcpConnectionManager = new TcpConnectionManager();
+            telemetryEngine = new com.example.service.telemetry.TelemetryEngine(this);
 
             setupListeners();
 
             // Start monitoring Wi-Fi hardware broadcasts
             wifiController.startMonitoring();
+
+            // Start Telemetry Engine (GPS + IMU + Device Status)
+            telemetryEngine.start();
 
             // Start background scheduler loop and alarm watchdog
             startAutonomousSchedulerLoop();
@@ -221,6 +237,12 @@ public class PersistentWifiTcpService extends Service {
                 stateManager.setPacketsReceivedCount(tcpConnectionManager.getTotalPacketsReceived());
                 stateManager.setTotalBytesTransferred(tcpConnectionManager.getTotalBytes());
                 stateManager.notifyPacketReceived(packet, source);
+
+                // Buffer external incoming TCP packet to local Room SQLite database
+                try {
+                    com.example.data.local.TelemetryBufferRepository.getInstance(PersistentWifiTcpService.this)
+                            .bufferExternalTcpPacket(source, packet);
+                } catch (Throwable ignoreDb) {}
             }
 
             @Override
@@ -299,11 +321,13 @@ public class PersistentWifiTcpService extends Service {
         Notification notification = buildNotification();
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                // API 34+: Use SPECIAL_USE with the declared manifest property
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                // API 34+: Use SPECIAL_USE and LOCATION
+                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                startForeground(NOTIFICATION_ID, notification, type);
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // API 29-33: Use CONNECTED_DEVICE
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+                // API 29-33: Use CONNECTED_DEVICE and LOCATION
+                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                startForeground(NOTIFICATION_ID, notification, type);
             } else {
                 startForeground(NOTIFICATION_ID, notification);
             }
@@ -334,17 +358,22 @@ public class PersistentWifiTcpService extends Service {
         );
 
         String hotspotStatus = stateManager.getHotspotInfo().isRunning()
-                ? "Hotspot: " + stateManager.getHotspotInfo().getSsid()
-                : "Hotspot: Standby";
+                ? "AP: " + stateManager.getHotspotInfo().getSsid()
+                : "AP: Standby";
 
         String tcpStatus = stateManager.isTcpServerRunning()
-                ? "TCP: Port " + stateManager.getTcpServerPort() + " (" + stateManager.getConnectedClients().size() + " peers)"
-                : "TCP: Inactive";
+                ? "TCP: :" + stateManager.getTcpServerPort() + " (" + stateManager.getConnectedClients().size() + " peers)"
+                : "TCP: Off";
 
-        String contentText = hotspotStatus + " | " + tcpStatus;
+        com.example.model.telemetry.UnifiedTelemetrySnapshot snapshot = stateManager.getLatestTelemetrySnapshot();
+        String telemetryStatus = "GPS: " + (snapshot != null && snapshot.getLocation().hasFix()
+                ? String.format(java.util.Locale.US, "%.1f km/h", snapshot.getLocation().getSpeedKmh())
+                : "Searching");
+
+        String contentText = hotspotStatus + " | " + tcpStatus + " | " + telemetryStatus;
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("WiFi & TCP Mesh (Background Service)")
+                .setContentTitle("Telemetry & Mesh Service")
                 .setContentText(contentText)
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setOngoing(true)
@@ -360,7 +389,7 @@ public class PersistentWifiTcpService extends Service {
                     "WiFi & TCP Local Mesh Service",
                     NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Maintains autonomous background Wi-Fi and TCP mesh connection without internet.");
+            channel.setDescription("Maintains autonomous background Wi-Fi, TCP mesh connection, and telemetry without internet.");
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) {
                 nm.createNotificationChannel(channel);
@@ -371,10 +400,16 @@ public class PersistentWifiTcpService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        logger.w(TAG, "Persistent Service onDestroy - Shutting down mesh background components.");
+        instance = null;
+        logger.w(TAG, "Persistent Service onDestroy - Shutting down mesh background components & telemetry.");
 
         cancelAlarmWatchdog();
         stateManager.setServiceRunning(false);
+
+        if (telemetryEngine != null) {
+            telemetryEngine.stop();
+            telemetryEngine = null;
+        }
 
         if (schedulerExecutor != null && !schedulerExecutor.isShutdown()) {
             schedulerExecutor.shutdownNow();

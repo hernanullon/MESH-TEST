@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,13 +46,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.model.*
+import com.example.data.local.*
 import com.example.service.MeshStateManager
 import com.example.service.PersistentWifiTcpService
 import com.example.service.ScheduleManager
+import com.example.ui.components.LocalPersistenceBufferCard
 import com.example.ui.theme.*
 import com.example.utils.AppLogger
 import com.example.utils.NetworkUtils
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -80,8 +84,10 @@ fun MainAppContainer() {
     val logger = remember { AppLogger.getInstance() }
     val scheduleManager = remember { ScheduleManager.getInstance().apply { init(context) } }
 
-    // Navigation State: 0 = Página 1 (Horarios y Red Fija), 1 = Página 2 (Gestión TCP)
-    var currentScreen by remember { mutableIntStateOf(0) }
+    // Navigation State: 0 = Setup / Configuración, 1 = Panel de Gestión Mesh TCP
+    // Si ya está configurado (isConfigured == true), salta directo a la pantalla 1 (Dashboard)
+    // Si es la primera vez o se limpiaron los datos, inicia en la pantalla 0 (Setup)
+    var currentScreen by remember { mutableIntStateOf(if (scheduleManager.isConfigured) 1 else 0) }
 
     // Service & Mesh State
     var isServiceRunning by remember { mutableStateOf(stateManager.isServiceRunning) }
@@ -93,6 +99,7 @@ fun MainAppContainer() {
     var packetsReceived by remember { mutableLongStateOf(stateManager.packetsReceivedCount) }
     var logs by remember { mutableStateOf(logger.logs) }
     var config by remember { mutableStateOf(scheduleManager.config) }
+    var telemetrySnapshot by remember { mutableStateOf(stateManager.latestTelemetrySnapshot) }
 
     // Permissions
     val permissionsLauncher = rememberLauncherForActivityResult(
@@ -129,6 +136,11 @@ fun MainAppContainer() {
                     } catch (_: Exception) {}
                 }
             }
+
+            // Si ya estaba configurado de antes, arrancar el servicio de forma autónoma
+            if (scheduleManager.isConfigured && !stateManager.isServiceRunning) {
+                startPersistentService(context)
+            }
         } catch (e: Exception) {
             logger.e("MainActivity", "Error requesting permissions: ${e.message}")
         }
@@ -144,6 +156,7 @@ fun MainAppContainer() {
                 connectedClients = state.connectedClients
                 packetsSent = state.packetsSentCount
                 packetsReceived = state.packetsReceivedCount
+                telemetrySnapshot = state.latestTelemetrySnapshot
             }
 
             override fun onMessageReceived(packet: TcpPacket, from: String) {
@@ -173,7 +186,7 @@ fun MainAppContainer() {
 
     LaunchedEffect(Unit) {
         while (true) {
-            delay(1000)
+            delay(2000)
             logs = logger.logs
             isServiceRunning = stateManager.isServiceRunning
             hotspotInfo = stateManager.hotspotInfo
@@ -183,6 +196,20 @@ fun MainAppContainer() {
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    if (currentScreen == 0 && config.isConfigured) {
+                        IconButton(
+                            onClick = { currentScreen = 1 },
+                            modifier = Modifier.testTag("action_back_to_dashboard")
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to Dashboard",
+                                tint = CyberCyanPrimary
+                            )
+                        }
+                    }
+                },
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -194,12 +221,25 @@ fun MainAppContainer() {
                                 .clip(CircleShape)
                                 .background(if (isServiceRunning) StatusActive else TextMuted)
                         )
-                        Text(
-                            text = if (currentScreen == 0) "Schedule & Network Setup" else "Local TCP Mesh",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
+                        Column {
+                            Text(
+                                text = if (currentScreen == 0) {
+                                    if (config.isConfigured) "Schedule & Network Setup" else "Initial Configuration"
+                                } else {
+                                    "Mesh TCP: ${config.deviceId}"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            if (currentScreen == 1) {
+                                Text(
+                                    text = if (isServiceRunning) "Autonomous Mode 24/7 (Active)" else "Service Stopped",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isServiceRunning) TechTealSecondary else TextMuted
+                                )
+                            }
+                        }
                     }
                 },
                 actions = {
@@ -209,8 +249,8 @@ fun MainAppContainer() {
                             modifier = Modifier.testTag("action_edit_schedule")
                         ) {
                             Icon(
-                                Icons.Default.Schedule,
-                                contentDescription = "Edit Schedule",
+                                Icons.Default.Settings,
+                                contentDescription = "Settings & Schedules",
                                 tint = CyberCyanPrimary
                             )
                         }
@@ -250,6 +290,15 @@ fun MainAppContainer() {
                         onScheduleSaved = {
                             startPersistentService(context)
                             currentScreen = 1
+                        },
+                        onNavigateBack = if (config.isConfigured) {
+                            { currentScreen = 1 }
+                        } else null,
+                        onResetConfiguration = {
+                            scheduleManager.resetConfiguration()
+                            config = scheduleManager.config
+                            currentScreen = 0
+                            Toast.makeText(context, "Configuration reset to initial state", Toast.LENGTH_SHORT).show()
                         }
                     )
                     1 -> TcpManagementScreen(
@@ -261,7 +310,8 @@ fun MainAppContainer() {
                         connectedClients = connectedClients,
                         packetsSent = packetsSent,
                         packetsReceived = packetsReceived,
-                        logs = logs
+                        logs = logs,
+                        telemetrySnapshot = telemetrySnapshot
                     )
                 }
             }
@@ -592,7 +642,7 @@ fun DaysOfWeekSelector(
 }
 
 /**
- * PÁGINA 1: Formulario de configuración de horario y Credenciales Fijas de Red (SSID / Clave / Puerto)
+ * Page 1: Initial setup / Operating schedule, node device ID, mesh credentials, hardware thresholds & AMQP server
  */
 @Composable
 fun ScheduleSetupScreen(
@@ -601,8 +651,11 @@ fun ScheduleSetupScreen(
     initialConfig: ScheduleConfig,
     hotspotInfo: HotspotInfo,
     tcpServerPort: Int,
-    onScheduleSaved: () -> Unit
+    onScheduleSaved: () -> Unit,
+    onNavigateBack: (() -> Unit)? = null,
+    onResetConfiguration: (() -> Unit)? = null
 ) {
+    var deviceIdText by remember { mutableStateOf(initialConfig.deviceId) }
     var startHour by remember { mutableIntStateOf(initialConfig.offStartHour) }
     var startMinute by remember { mutableIntStateOf(initialConfig.offStartMinute) }
     var endHour by remember { mutableIntStateOf(initialConfig.offEndHour) }
@@ -614,11 +667,36 @@ fun ScheduleSetupScreen(
 
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
+    var showResetDialog by remember { mutableStateOf(false) }
+    var showAdvancedHardware by remember { mutableStateOf(false) }
+    var showAmqpSection by remember { mutableStateOf(true) }
 
-    // Campos de Red Fija para que todos los nodos conozcan siempre las mismas credenciales
+    // Fixed Mesh Network Credentials
     var customSsidText by remember { mutableStateOf(initialConfig.customSsid) }
     var customPassText by remember { mutableStateOf(initialConfig.customPassphrase) }
     var customPortText by remember { mutableStateOf(initialConfig.tcpPort.toString()) }
+
+    // Hardware Relays & Protection Thresholds
+    var ipDriverText by remember { mutableStateOf(initialConfig.ipDriver) }
+    var batteryMinText by remember { mutableStateOf(initialConfig.batteryMin.toString()) }
+    var batteryMaxText by remember { mutableStateOf(initialConfig.batteryMax.toString()) }
+    var tempMinText by remember { mutableStateOf(initialConfig.tempMin.toString()) }
+    var tempMaxText by remember { mutableStateOf(initialConfig.tempMax.toString()) }
+
+    // Internal Sensor Sampling Rates
+    var locationIntervalText by remember { mutableStateOf(initialConfig.locationIntervalSeconds.toString()) }
+    var inertialIntervalText by remember { mutableStateOf(initialConfig.inertialIntervalMs.toString()) }
+
+    // AMQP / RabbitMQ Cloud Sync Server Credentials
+    var amqpHostText by remember { mutableStateOf(initialConfig.amqpHost) }
+    var amqpPortText by remember { mutableStateOf(initialConfig.amqpPort.toString()) }
+    var amqpVHostText by remember { mutableStateOf(initialConfig.amqpVirtualHost) }
+    var amqpUserText by remember { mutableStateOf(initialConfig.amqpUsername) }
+    var amqpPassText by remember { mutableStateOf(initialConfig.amqpPassword) }
+    var amqpExchangeText by remember { mutableStateOf(initialConfig.amqpExchange) }
+    var amqpRoutingKeyText by remember { mutableStateOf(initialConfig.amqpRoutingKey) }
+    var amqpQueueText by remember { mutableStateOf(initialConfig.amqpQueue) }
+    var amqpSslEnabled by remember { mutableStateOf(initialConfig.isAmqpSslEnabled) }
 
     var currentTimeStr by remember { mutableStateOf("") }
 
@@ -632,6 +710,7 @@ fun ScheduleSetupScreen(
     }
 
     val portNumber = (customPortText.toIntOrNull() ?: 8888).coerceIn(1024, 65535)
+    val amqpPortNumber = (amqpPortText.toIntOrNull() ?: 5672).coerceIn(1, 65535)
 
     val previewOffStr = String.format(Locale.US, "%02d:%02d - %02d:%02d", startHour, startMinute, endHour, endMinute)
     val previewTcpOnStr = remember(startHour, startMinute, endHour, endMinute) {
@@ -673,6 +752,45 @@ fun ScheduleSetupScreen(
         )
     }
 
+    // Reset Confirmation Dialog
+    if (showResetDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetDialog = false },
+            containerColor = DarkSurface,
+            titleContentColor = StatusError,
+            textContentColor = TextPrimary,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = StatusError)
+                    Text("Reset Configuration")
+                }
+            },
+            text = {
+                Text(
+                    "This action will clear all saved preferences in SharedPreferences. " +
+                    "The application will return to First Run setup mode.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showResetDialog = false
+                        onResetConfiguration?.invoke()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusError)
+                ) {
+                    Text("Yes, Reset", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showResetDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -683,23 +801,52 @@ fun ScheduleSetupScreen(
         // Header
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, CyberCyanPrimary.copy(alpha = 0.3f)),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (!initialConfig.isConfigured) CyberCyanPrimary.copy(alpha = 0.08f) else DarkSurface
+                ),
+                border = BorderStroke(1.dp, if (!initialConfig.isConfigured) CyberCyanPrimary else DarkBorder),
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Schedule & Network Configuration",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Configure operating days, Wi-Fi ON window (TCP OFF), and fixed mesh network credentials.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (!initialConfig.isConfigured) "Initial Setup (First Run)" else "Operating & Network Settings",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (!initialConfig.isConfigured) CyberCyanPrimary else TextPrimary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (!initialConfig.isConfigured)
+                                    "Complete initial parameters to initialize node telemetry, schedule, and cloud sync."
+                                else
+                                    "Modify operating days, Wi-Fi window, mesh credentials, and broker settings.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+
+                        if (!initialConfig.isConfigured) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = CyberCyanPrimary.copy(alpha = 0.2f),
+                                border = BorderStroke(1.dp, CyberCyanPrimary)
+                            ) {
+                                Text(
+                                    text = "NEW",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CyberCyanPrimary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(
@@ -727,6 +874,41 @@ fun ScheduleSetupScreen(
             }
         }
 
+        // Node / Device Identifier
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, TechTealSecondary.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Badge, contentDescription = null, tint = TechTealSecondary)
+                        Text(
+                            text = "Node Identifier (Device ID)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = TechTealSecondary
+                        )
+                    }
+                    Text(
+                        text = "Unique identifier attached to telemetry payloads and mesh packets.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+
+                    OutlinedTextField(
+                        value = deviceIdText,
+                        onValueChange = { deviceIdText = it },
+                        label = { Text("Device ID (e.g. NODE-01, BUS-102)") },
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Fingerprint, contentDescription = null, tint = TechTealSecondary) },
+                        modifier = Modifier.fillMaxWidth().testTag("input_device_id")
+                    )
+                }
+            }
+        }
+
         // Operating Days Selector
         item {
             DaysOfWeekSelector(
@@ -744,7 +926,7 @@ fun ScheduleSetupScreen(
             )
         }
 
-        // Schedule Form
+        // Schedule Form (Wi-Fi ON Window / Automatic TCP ON Complement)
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -755,7 +937,7 @@ fun ScheduleSetupScreen(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Default.AccessTime, contentDescription = null, tint = CyberCyanPrimary)
                         Text(
-                            text = "Wi-Fi ON Window",
+                            text = "Wi-Fi Client Connection Window",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = CyberCyanPrimary
@@ -763,7 +945,7 @@ fun ScheduleSetupScreen(
                     }
 
                     Text(
-                        text = "Tap cards to set Wi-Fi active time. Outside this window, TCP Mesh operates.",
+                        text = "Tap cards to set the Wi-Fi active window. All remaining time outside this window will run TCP Mesh & Hotspot automatically.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
@@ -773,7 +955,7 @@ fun ScheduleSetupScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         TimeSelectionCard(
-                            label = "Start",
+                            label = "Wi-Fi Start",
                             subLabel = "Wi-Fi ON / TCP OFF",
                             hour = startHour,
                             minute = startMinute,
@@ -784,7 +966,7 @@ fun ScheduleSetupScreen(
                         )
 
                         TimeSelectionCard(
-                            label = "End",
+                            label = "Wi-Fi End",
                             subLabel = "Wi-Fi OFF / TCP ON",
                             hour = endHour,
                             minute = endMinute,
@@ -798,7 +980,7 @@ fun ScheduleSetupScreen(
             }
         }
 
-        // Fixed Network Credentials
+        // Fixed Mesh Network Credentials
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -809,7 +991,7 @@ fun ScheduleSetupScreen(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Default.VpnKey, contentDescription = null, tint = TechTealSecondary)
                         Text(
-                            text = "Fixed Network Credentials",
+                            text = "Fixed Mesh Network Credentials",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = TechTealSecondary
@@ -817,7 +999,7 @@ fun ScheduleSetupScreen(
                     }
 
                     Text(
-                        text = "Static credentials secondary nodes (ESP32, phones, sensors) use to connect to this mesh.",
+                        text = "Static Hotspot credentials that secondary nodes (ESP32 sensors, other nodes) connect to.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
@@ -825,7 +1007,7 @@ fun ScheduleSetupScreen(
                     OutlinedTextField(
                         value = customSsidText,
                         onValueChange = { customSsidText = it },
-                        label = { Text("Network Name (SSID)") },
+                        label = { Text("Hotspot Network Name (SSID)") },
                         singleLine = true,
                         leadingIcon = { Icon(Icons.Default.WifiTethering, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_custom_ssid")
@@ -834,7 +1016,7 @@ fun ScheduleSetupScreen(
                     OutlinedTextField(
                         value = customPassText,
                         onValueChange = { customPassText = it },
-                        label = { Text("Passphrase (min 8 chars)") },
+                        label = { Text("Passphrase (min 8 characters)") },
                         singleLine = true,
                         leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().testTag("input_custom_pass")
@@ -852,6 +1034,274 @@ fun ScheduleSetupScreen(
             }
         }
 
+        // AMQP / RabbitMQ Cloud Sync Server Credentials
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, CyberCyanPrimary.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.CloudSync, contentDescription = null, tint = CyberCyanPrimary)
+                            Column {
+                                Text(
+                                    text = "AMQP / RabbitMQ Server Credentials",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CyberCyanPrimary
+                                )
+                                Text(
+                                    text = "Telemetry ingestion & cloud sync broker",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+
+                        IconButton(onClick = { showAmqpSection = !showAmqpSection }) {
+                            Icon(
+                                if (showAmqpSection) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = "Toggle AMQP settings",
+                                tint = CyberCyanPrimary
+                            )
+                        }
+                    }
+
+                    if (showAmqpSection) {
+                        Text(
+                            text = "Broker connection parameters used during the Wi-Fi ON window to publish gathered telemetry.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = amqpHostText,
+                                onValueChange = { amqpHostText = it },
+                                label = { Text("Broker Host / IP") },
+                                singleLine = true,
+                                leadingIcon = { Icon(Icons.Default.Dns, contentDescription = null) },
+                                modifier = Modifier.weight(2f).testTag("input_amqp_host")
+                            )
+
+                            OutlinedTextField(
+                                value = amqpPortText,
+                                onValueChange = { if (it.length <= 5) amqpPortText = it },
+                                label = { Text("Port") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("input_amqp_port")
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = amqpUserText,
+                                onValueChange = { amqpUserText = it },
+                                label = { Text("Username") },
+                                singleLine = true,
+                                leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null) },
+                                modifier = Modifier.weight(1f).testTag("input_amqp_user")
+                            )
+
+                            OutlinedTextField(
+                                value = amqpPassText,
+                                onValueChange = { amqpPassText = it },
+                                label = { Text("Password") },
+                                singleLine = true,
+                                leadingIcon = { Icon(Icons.Default.Password, contentDescription = null) },
+                                modifier = Modifier.weight(1f).testTag("input_amqp_pass")
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = amqpExchangeText,
+                                onValueChange = { amqpExchangeText = it },
+                                label = { Text("Exchange Name") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("input_amqp_exchange")
+                            )
+
+                            OutlinedTextField(
+                                value = amqpRoutingKeyText,
+                                onValueChange = { amqpRoutingKeyText = it },
+                                label = { Text("Routing Key") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f).testTag("input_amqp_routing_key")
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hardware Relays & Protection Thresholds (ESP-01)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, DarkBorder),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.ElectricBolt, contentDescription = null, tint = StatusWarning)
+                            Column {
+                                Text(
+                                    text = "Hardware Relay & Protection Thresholds",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = "ESP-01 Driver & cutoff limits",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+
+                        IconButton(onClick = { showAdvancedHardware = !showAdvancedHardware }) {
+                            Icon(
+                                if (showAdvancedHardware) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = "Toggle hardware settings",
+                                tint = TechTealSecondary
+                            )
+                        }
+                    }
+
+                    if (showAdvancedHardware) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = ipDriverText,
+                            onValueChange = { ipDriverText = it },
+                            label = { Text("Relay Driver IP (ESP-01)") },
+                            singleLine = true,
+                            leadingIcon = { Icon(Icons.Default.Router, contentDescription = null) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = batteryMinText,
+                                onValueChange = { if (it.length <= 3) batteryMinText = it },
+                                label = { Text("Min Battery %") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = batteryMaxText,
+                                onValueChange = { if (it.length <= 3) batteryMaxText = it },
+                                label = { Text("Max Battery %") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = tempMinText,
+                                onValueChange = { if (it.length <= 3) tempMinText = it },
+                                label = { Text("Min Temp °C") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = tempMaxText,
+                                onValueChange = { if (it.length <= 3) tempMaxText = it },
+                                label = { Text("Max Temp °C") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sensor Sampling Rates Configuration (GPS & IMU)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, TechTealSecondary.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Sensors, contentDescription = null, tint = TechTealSecondary)
+                        Column {
+                            Text(
+                                text = "Sensor Sampling Rates (Tasas de Muestreo)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = TechTealSecondary
+                            )
+                            Text(
+                                text = "Configura la frecuencia de lectura de los sensores internos",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "• GPS / Ubicación: Intervalo en segundos (mínimo y por defecto: 1s).\n" +
+                               "• Inercial / IMU: Intervalo en milisegundos (por defecto: 200ms, mín: 20ms).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = locationIntervalText,
+                            onValueChange = { if (it.length <= 4) locationIntervalText = it },
+                            label = { Text("GPS Rate (Segundos)") },
+                            singleLine = true,
+                            leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null, tint = TechTealSecondary) },
+                            modifier = Modifier.weight(1f).testTag("input_location_interval")
+                        )
+
+                        OutlinedTextField(
+                            value = inertialIntervalText,
+                            onValueChange = { if (it.length <= 5) inertialIntervalText = it },
+                            label = { Text("IMU Rate (Milisegundos)") },
+                            singleLine = true,
+                            leadingIcon = { Icon(Icons.Default.Explore, contentDescription = null, tint = TechTealSecondary) },
+                            modifier = Modifier.weight(1f).testTag("input_inertial_interval")
+                        )
+                    }
+                }
+            }
+        }
+
         // Switching Summary
         item {
             Card(
@@ -861,7 +1311,7 @@ fun ScheduleSetupScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Switching Schedule Summary:",
+                        text = "Calculated Switching Summary:",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
@@ -906,7 +1356,7 @@ fun ScheduleSetupScreen(
                         ) {
                             Icon(Icons.Default.Wifi, contentDescription = null, tint = CyberCyanPrimary)
                             Column {
-                                Text("Wi-Fi ON", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                Text("Wi-Fi ON (Sync & Cloud Upload)", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                                 Text(
                                     text = previewOffStr,
                                     style = MaterialTheme.typography.bodyMedium,
@@ -931,7 +1381,7 @@ fun ScheduleSetupScreen(
                             ) {
                                 Icon(Icons.Default.CellWifi, contentDescription = null, tint = TechTealSecondary)
                                 Column {
-                                    Text("TCP Mesh ON", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                    Text("TCP Mesh ON (Hotspot & Telemetry)", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                                     Text(
                                         text = previewTcpOnStr,
                                         style = MaterialTheme.typography.bodyMedium,
@@ -983,14 +1433,48 @@ fun ScheduleSetupScreen(
         item {
             Button(
                 onClick = {
+                    val finalDeviceId = if (deviceIdText.trim().isNotEmpty()) deviceIdText.trim() else "NODE-01"
                     val finalSsid = if (customSsidText.trim().isNotEmpty()) customSsidText.trim() else "Direct-Mesh-Master"
                     val finalPass = if (customPassText.trim().isNotEmpty()) customPassText.trim() else "MeshPassword123"
+                    val finalIpDriver = if (ipDriverText.trim().isNotEmpty()) ipDriverText.trim() else "192.168.43.100"
+                    val bMin = batteryMinText.toIntOrNull() ?: 20
+                    val bMax = batteryMaxText.toIntOrNull() ?: 80
+                    val tMin = tempMinText.toIntOrNull() ?: 15
+                    val tMax = tempMaxText.toIntOrNull() ?: 45
+                    val locInterval = (locationIntervalText.toIntOrNull() ?: 1).coerceAtLeast(1)
+                    val imuInterval = (inertialIntervalText.toIntOrNull() ?: 200).coerceAtLeast(20)
 
-                    scheduleManager.setActiveDays(selectedDays.map { java.lang.Integer.valueOf(it) })
-                    scheduleManager.setInvertedSchedule(startHour, startMinute, endHour, endMinute)
-                    scheduleManager.updateNetworkCredentials(finalSsid, finalPass, portNumber)
+                    val daysList = selectedDays.map { java.lang.Integer.valueOf(it) }
 
-                    Toast.makeText(context, "Schedule & days saved", Toast.LENGTH_SHORT).show()
+                    scheduleManager.updateFullConfiguration(
+                        finalDeviceId,
+                        daysList,
+                        startHour,
+                        startMinute,
+                        endHour,
+                        endMinute,
+                        finalSsid,
+                        finalPass,
+                        portNumber,
+                        finalIpDriver,
+                        bMin,
+                        bMax,
+                        tMin,
+                        tMax,
+                        amqpHostText.trim(),
+                        amqpPortNumber,
+                        amqpVHostText.trim(),
+                        amqpUserText.trim(),
+                        amqpPassText,
+                        amqpExchangeText.trim(),
+                        amqpRoutingKeyText.trim(),
+                        amqpQueueText.trim(),
+                        amqpSslEnabled,
+                        locInterval,
+                        imuInterval
+                    )
+
+                    Toast.makeText(context, "Configuration saved successfully", Toast.LENGTH_SHORT).show()
                     onScheduleSaved()
                 },
                 colors = ButtonDefaults.buttonColors(
@@ -1006,17 +1490,53 @@ fun ScheduleSetupScreen(
                 Icon(Icons.Default.Check, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Save & Continue",
+                    text = if (!initialConfig.isConfigured) "Save & Start Operation" else "Save Changes",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp
                 )
+            }
+        }
+
+        // Return to Dashboard (If already configured)
+        if (initialConfig.isConfigured && onNavigateBack != null) {
+            item {
+                OutlinedButton(
+                    onClick = onNavigateBack,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Back to Management Dashboard")
+                }
+            }
+        }
+
+        // Reset Initial Configuration (Danger / Testing Zone)
+        if (initialConfig.isConfigured && onResetConfiguration != null) {
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(
+                    onClick = { showResetDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.DeleteForever, contentDescription = null, tint = StatusError, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "Reset to Initial Setup (First Run)",
+                        color = StatusError,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
             }
         }
     }
 }
 
 /**
- * PÁGINA 2: Gestión de la Red TCP con acceso a modificar el horario
+ * PÁGINA 2: Gestión de la Red TCP con acceso a modificar el horario y Telemetría en Vivo
  */
 @Composable
 fun TcpManagementScreen(
@@ -1028,10 +1548,14 @@ fun TcpManagementScreen(
     connectedClients: List<ConnectedClient>,
     packetsSent: Long,
     packetsReceived: Long,
-    logs: List<NetworkLog>
+    logs: List<NetworkLog>,
+    telemetrySnapshot: com.example.model.telemetry.UnifiedTelemetrySnapshot
 ) {
     var messageText by remember { mutableStateOf("") }
     val localIp = remember { NetworkUtils.getLocalIpAddress() }
+
+    var capturedSnapshot by remember { mutableStateOf<com.example.model.telemetry.UnifiedTelemetrySnapshot?>(null) }
+    var snapshotTimestamp by remember { mutableStateOf<String?>(null) }
 
     val networkSsid = if (hotspotInfo.ssid.isNotEmpty()) hotspotInfo.ssid else scheduleConfig.customSsid
     val networkPass = if (hotspotInfo.passphrase.isNotEmpty()) hotspotInfo.passphrase else scheduleConfig.customPassphrase
@@ -1128,6 +1652,358 @@ fun TcpManagementScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = TechTealSecondary
                     )
+                }
+            }
+        }
+
+        // On-Demand Base Telemetry Snapshot Card (GPS + IMU + Device)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                border = BorderStroke(1.dp, CyberCyanPrimary.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Header with Title and Snapshot Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Sensors,
+                                contentDescription = null,
+                                tint = CyberCyanPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Base Telemetry (On-Demand)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = if (snapshotTimestamp != null) "Snapshot capturado a las $snapshotTimestamp" else "Muestreo bajo demanda (0% consumo en reposo)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (snapshotTimestamp != null) CyberCyanPrimary else TextMuted
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                val service = PersistentWifiTcpService.getInstance()
+                                val snap = if (service != null && service.telemetryEngine != null) {
+                                    service.telemetryEngine.sampleSnapshotNow()
+                                } else {
+                                    MeshStateManager.getInstance().latestTelemetrySnapshot
+                                        ?: com.example.model.telemetry.UnifiedTelemetrySnapshot.empty(scheduleConfig.deviceId)
+                                }
+                                capturedSnapshot = snap
+                                snapshotTimestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CyberCyanPrimary.copy(alpha = 0.2f),
+                                contentColor = CyberCyanPrimary
+                            ),
+                            border = BorderStroke(1.dp, CyberCyanPrimary),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("btn_capture_telemetry_snapshot")
+                        ) {
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = "Capture Snapshot",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Snapshot", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    val currentSnap = capturedSnapshot
+                    if (currentSnap == null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = DarkSurfaceVariant,
+                            border = BorderStroke(1.dp, DarkBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Default.Speed, contentDescription = null, tint = TextMuted, modifier = Modifier.size(28.dp))
+                                Text(
+                                    text = "Actualizaciones en tiempo real desactivadas",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = "Para no saturar la CPU ni la memoria del dispositivo, presione el botón 'Snapshot' para inspeccionar una muestra instantánea de GPS, Inercial y Hardware.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextMuted,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
+                    } else {
+                        val loc = currentSnap.location
+                        val imu = currentSnap.inertial
+                        val dev = currentSnap.deviceStatus
+
+                        // 1. GPS & Location Metrics Grid
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = DarkSurfaceVariant,
+                            border = BorderStroke(1.dp, DarkBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.LocationOn,
+                                            contentDescription = null,
+                                            tint = if (loc.hasFix()) StatusActive else StatusWarning,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            "GPS & Navigation",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (loc.hasFix()) StatusActive.copy(alpha = 0.15f) else StatusWarning.copy(alpha = 0.15f)
+                                    ) {
+                                        Text(
+                                            text = loc.fixStatusDescription,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (loc.hasFix()) StatusActive else StatusWarning,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    // Speed KPI
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Speed", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                        Text(
+                                            text = String.format(Locale.US, "%.1f km/h", loc.speedKmh),
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CyberCyanPrimary
+                                        )
+                                    }
+
+                                    // Coordinates
+                                    Column(modifier = Modifier.weight(2f)) {
+                                        Text("Coordinates", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                                        Text(
+                                            text = loc.coordinatesFormatted,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = String.format(Locale.US, "Alt: %.1fm | Bearing: %.1f° | Acc: ±%.1fm", loc.altitude, loc.bearing, loc.accuracy),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextMuted
+                                    )
+                                    Text(
+                                        text = "Sats: ${loc.satellites}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TechTealSecondary
+                                    )
+                                }
+                            }
+                        }
+
+                        // 2. Inertial & IMU Metrics Grid
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = DarkSurfaceVariant,
+                            border = BorderStroke(1.dp, DarkBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Default.Explore, contentDescription = null, tint = TechTealSecondary, modifier = Modifier.size(16.dp))
+                                    Text("Inertial IMU (Filtered)", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = TextPrimary)
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = DarkBackground,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(6.dp)) {
+                                            Text("Accel (|G|)", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
+                                            Text(
+                                                text = String.format(Locale.US, "%.1f m/s²", imu.accelMagnitude),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = CyberCyanPrimary
+                                            )
+                                            Text(
+                                                text = String.format(Locale.US, "X:%.1f Y:%.1f Z:%.1f", imu.accelX, imu.accelY, imu.accelZ),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 9.sp,
+                                                color = TextMuted
+                                            )
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = DarkBackground,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(6.dp)) {
+                                            Text("Gyroscope", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
+                                            Text(
+                                                text = String.format(Locale.US, "%.2f rad/s", (Math.abs(imu.gyroX) + Math.abs(imu.gyroY) + Math.abs(imu.gyroZ))),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TechTealSecondary
+                                            )
+                                            Text(
+                                                text = String.format(Locale.US, "X:%.1f Y:%.1f Z:%.1f", imu.gyroX, imu.gyroY, imu.gyroZ),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 9.sp,
+                                                color = TextMuted
+                                            )
+                                        }
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = DarkBackground,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(6.dp)) {
+                                            Text("Orientation", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
+                                            Text(
+                                                text = String.format(Locale.US, "P:%.0f° R:%.0f°", imu.pitch, imu.roll),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextPrimary
+                                            )
+                                            Text(
+                                                text = String.format(Locale.US, "Yaw: %.0f°", imu.yaw),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 9.sp,
+                                                color = TextMuted
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Device & Hardware Health Grid
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = DarkSurfaceVariant,
+                            border = BorderStroke(1.dp, DarkBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Battery
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        if (dev.isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
+                                        contentDescription = null,
+                                        tint = if (dev.batteryLevelPercent > 20) StatusActive else StatusError,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "${dev.batteryLevelPercent}% (${dev.batteryTemperatureC}°C)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextPrimary
+                                        )
+                                        Text(
+                                            text = if (dev.isCharging) "Charging (${dev.chargeSource})" else "Discharging",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextMuted
+                                        )
+                                    }
+                                }
+
+                                // RAM & Storage
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = "RAM: ${dev.ramUsagePercent}% (${dev.freeRamMb}MB free)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TextPrimary
+                                    )
+                                    Text(
+                                        text = "Disk: ${String.format(Locale.US, "%.1f", dev.freeStorageGb)}GB free",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1559,6 +2435,11 @@ fun TcpManagementScreen(
             }
         }
 
+        // Local Persistence Buffer (Room SQLite) Card
+        item {
+            LocalPersistenceBufferCard(context = context)
+        }
+
         // System OS & Keep-Alive Settings Card
         item {
             KeepAliveSettingsCard(context = context)
@@ -1787,3 +2668,5 @@ fun KeepAliveSettingsCard(context: Context) {
         }
     }
 }
+
+
