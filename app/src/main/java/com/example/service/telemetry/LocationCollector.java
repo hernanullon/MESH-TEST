@@ -239,14 +239,28 @@ public class LocationCollector implements LocationListener {
 
     /**
      * Watchdog check: If no location updates received in the last 20 seconds, reconnect safely.
+     * Also detects when permissions were granted after initial service start.
      */
     public synchronized void checkLivenessAndRestart() {
         if (!isRunning) return;
+        if (lastUpdateTimestamp == 0 && hasLocationPermission()) {
+            retryRegistration();
+            return;
+        }
         long now = System.currentTimeMillis();
         if (lastUpdateTimestamp > 0 && (now - lastUpdateTimestamp) > 20000) {
             logger.w(TAG, "Location updates stalled (>20s). Restarting location listeners...");
             stop();
             start();
+        }
+    }
+
+    public synchronized void retryRegistration() {
+        if (isRunning && hasLocationPermission()) {
+            logger.i(TAG, "Location permissions available, registering providers...");
+            registerProviders();
+            registerGnssStatus();
+            fetchLastKnownLocation();
         }
     }
 

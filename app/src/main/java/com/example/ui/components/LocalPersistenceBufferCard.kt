@@ -36,7 +36,7 @@ fun LocalPersistenceBufferCard(
     val inertialCount by repository.inertialCount.collectAsState()
     val deviceStatusCount by repository.deviceStatusCount.collectAsState()
     val externalTcpCount by repository.externalTcpCount.collectAsState()
-    val lastRecord by repository.lastBufferedRecord.collectAsState()
+    val isBufferingInhibited by repository.isBufferingInhibited.collectAsState()
 
     val coroutineScope = rememberCoroutineScope()
     var showInspectDialog by remember { mutableStateOf(false) }
@@ -76,13 +76,13 @@ fun LocalPersistenceBufferCard(
                     )
                     Column {
                         Text(
-                            text = "Buffer Local Independiente (SQLite Room)",
+                            text = "Independent Local Buffer (SQLite Room)",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary
                         )
                         Text(
-                            text = "Almacenamiento bruto desagrupado por grupo",
+                            text = "Raw ungrouped multi-sensor storage",
                             style = MaterialTheme.typography.labelSmall,
                             color = TextMuted
                         )
@@ -93,16 +93,53 @@ fun LocalPersistenceBufferCard(
                 IconButton(
                     onClick = {
                         repository.refreshCounters()
-                        Toast.makeText(context, "Cantidades de buffer actualizadas", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Buffer counts refreshed", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.size(32.dp).testTag("btn_refresh_buffer_stats")
                 ) {
                     Icon(
                         Icons.Default.Refresh,
-                        contentDescription = "Refrescar Cantidades",
+                        contentDescription = "Refresh Counts",
                         tint = CyberCyanPrimary,
                         modifier = Modifier.size(18.dp)
                     )
+                }
+            }
+
+            // Inhibition / Pause Banner during Wi-Fi Active Discharge
+            if (isBufferingInhibited) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = StatusWarning.copy(alpha = 0.15f),
+                    border = BorderStroke(1.dp, StatusWarning.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.PauseCircle,
+                            contentDescription = null,
+                            tint = StatusWarning,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Persistence Paused (Wi-Fi Discharge Active)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = StatusWarning
+                            )
+                            Text(
+                                text = "Wi-Fi is active for AMQP discharge. Ingestion to SQLite is paused to avoid infinite loops.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
                 }
             }
 
@@ -120,9 +157,9 @@ fun LocalPersistenceBufferCard(
                         modifier = Modifier.weight(1f)
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
-                            Text("Total Bruto", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
+                            Text("Total Records", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
                             Text("$totalCount", fontWeight = FontWeight.Bold, color = CyberCyanPrimary, fontSize = 16.sp)
-                            Text("En base SQLite", fontSize = 9.sp, color = TextMuted)
+                            Text("In SQLite DB", fontSize = 9.sp, color = TextMuted)
                         }
                     }
 
@@ -134,9 +171,9 @@ fun LocalPersistenceBufferCard(
                         modifier = Modifier.weight(1f)
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
-                            Text("Pendiente Sync", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
+                            Text("Pending Sync", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
                             Text("$unsyncedCount", fontWeight = FontWeight.Bold, color = TechTealSecondary, fontSize = 16.sp)
-                            Text("Para AMQP", fontSize = 9.sp, color = TextMuted)
+                            Text("For AMQP Cloud", fontSize = 9.sp, color = TextMuted)
                         }
                     }
                 }
@@ -203,95 +240,26 @@ fun LocalPersistenceBufferCard(
                 }
             }
 
-            // Last Record Preview
-            val last = lastRecord
-            if (last != null) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = DarkBackground,
-                    border = BorderStroke(1.dp, DarkBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Último: [${last.sourceType}] ${last.deviceId}",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = when (last.sourceType) {
-                                    "LOCATION" -> TechTealSecondary
-                                    "INERTIAL" -> CyberCyanPrimary
-                                    "DEVICE_STATUS" -> StatusActive
-                                    else -> TextPrimary
-                                }
-                            )
-                            Text(
-                                text = last.formattedDate,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted,
-                                fontSize = 9.sp
-                            )
-                        }
-                        Text(
-                            text = last.shortPayloadPreview,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = TextPrimary,
-                            maxLines = 2,
-                            fontSize = 11.sp
-                        )
+            // Diagnostic Buffer Inspection
+            OutlinedButton(
+                onClick = {
+                    coroutineScope.launch {
+                        isInspecting = true
+                        inspectRecords = repository.getRecentRecordsDirect(30)
+                        repository.refreshCounters()
+                        isInspecting = false
+                        showInspectDialog = true
                     }
-                }
-            }
-
-            // Action Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = CyberCyanPrimary),
+                border = BorderStroke(1.dp, CyberCyanPrimary.copy(alpha = 0.6f)),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                modifier = Modifier.fillMaxWidth().testTag("btn_inspect_buffer")
             ) {
-                // Button to Inspect on demand
-                OutlinedButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            isInspecting = true
-                            inspectRecords = repository.getRecentRecordsDirect(30)
-                            repository.refreshCounters()
-                            isInspecting = false
-                            showInspectDialog = true
-                        }
-                    },
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = CyberCyanPrimary),
-                    border = BorderStroke(1.dp, CyberCyanPrimary.copy(alpha = 0.6f)),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    modifier = Modifier.weight(1.2f).testTag("btn_inspect_buffer")
-                ) {
-                    Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Ver Cantidades / Datos", style = MaterialTheme.typography.labelMedium, fontSize = 12.sp)
-                }
-
-                // Clear
-                OutlinedButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            repository.clearAllBuffer()
-                            Toast.makeText(context, "Buffer local vaciado completamente", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusError),
-                    border = BorderStroke(1.dp, StatusError.copy(alpha = 0.6f)),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    modifier = Modifier.weight(0.8f).testTag("btn_clear_buffer")
-                ) {
-                    Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Vaciar", style = MaterialTheme.typography.labelMedium, fontSize = 12.sp)
-                }
+                Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Inspect Buffered Records (Diagnostic View)", style = MaterialTheme.typography.labelMedium, fontSize = 12.sp)
             }
         }
     }
@@ -321,13 +289,13 @@ fun TelemetryBufferInspectionDialog(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(Icons.Default.Storage, contentDescription = null, tint = TechTealSecondary)
-                Text("Inspector de Buffer Local (SQLite)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("Local Buffer Inspector (SQLite)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
                 Text(
-                    text = "Mostrando las últimas ${records.size} tramas registradas en Room Database (desagrupadas con su type independiente):",
+                    text = "Displaying the last ${records.size} records in Room database (ungrouped by independent type):",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextMuted,
                     modifier = Modifier.padding(bottom = 8.dp)
@@ -338,7 +306,7 @@ fun TelemetryBufferInspectionDialog(
                         modifier = Modifier.fillMaxWidth().padding(32.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("No hay registros en el buffer.", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text("No records found in local buffer.", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                 } else {
                     LazyColumn(
@@ -407,7 +375,7 @@ fun TelemetryBufferInspectionDialog(
                                         IconButton(
                                             onClick = {
                                                 clipboardManager?.setPrimaryClip(ClipData.newPlainText("Telemetry JSON", record.payloadJson))
-                                                Toast.makeText(context, "JSON copiado al portapapeles", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "JSON copied to clipboard", Toast.LENGTH_SHORT).show()
                                             },
                                             modifier = Modifier.size(24.dp)
                                         ) {
@@ -426,7 +394,7 @@ fun TelemetryBufferInspectionDialog(
                 onClick = onDismiss,
                 colors = ButtonDefaults.buttonColors(containerColor = CyberCyanPrimary, contentColor = DarkBackground)
             ) {
-                Text("Cerrar", fontWeight = FontWeight.Bold)
+                Text("Close", fontWeight = FontWeight.Bold)
             }
         },
         containerColor = DarkSurface,

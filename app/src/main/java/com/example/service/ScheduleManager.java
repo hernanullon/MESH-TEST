@@ -32,6 +32,7 @@ public class ScheduleManager {
 
     private ScheduleConfig config;
     private SharedPreferences prefs;
+    private Context appContext;
 
     // Track last applied states to prevent redundant logs/actions
     private Boolean lastAppliedWifiState = null;
@@ -59,6 +60,9 @@ public class ScheduleManager {
     }
 
     public synchronized void init(Context context) {
+        if (context != null) {
+            this.appContext = context.getApplicationContext();
+        }
         if (prefs == null && context != null) {
             prefs = context.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
             loadFromPreferences();
@@ -165,6 +169,13 @@ public class ScheduleManager {
             this.lastAppliedWifiState = null;
             this.lastAppliedHotspotState = null;
             saveToPreferences();
+
+            try {
+                if (appContext != null) {
+                    com.example.service.amqp.AmqpCloudManager.getInstance(appContext).updateConfig(config);
+                }
+            } catch (Throwable ignored) {}
+
             logger.s(TAG, "Global configuration saved. Device: " + config.getDeviceId()
                     + " | Days: " + config.getActiveDaysFormatted()
                     + " | Wi-Fi ON window: " + config.getConfiguredOffWindowFormatted()
@@ -403,6 +414,23 @@ public class ScheduleManager {
                      lastAppliedWifiState = wifiTargetState;
                  }
              }
+
+             if (wifiTargetState) {
+                 try {
+                     if (appContext != null) {
+                         com.example.service.amqp.AmqpCloudManager.getInstance(appContext).onWifiWindowActive(true);
+                     }
+                 } catch (Throwable ignored) {}
+             }
+         }
+
+         // When local TCP network / Hotspot is active, ensure Wi-Fi discharge window is inactive and Real-time SIM stream resumes
+         if (hotspotTargetState) {
+             try {
+                 if (appContext != null) {
+                     com.example.service.amqp.AmqpCloudManager.getInstance(appContext).onWifiWindowActive(false);
+                 }
+             } catch (Throwable ignored) {}
          }
 
          // Format summary status for UI telemetry

@@ -1,5 +1,6 @@
 package com.example.service;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -7,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -14,6 +16,7 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 import com.example.MainActivity;
 import com.example.model.ConnectedClient;
 import com.example.model.HotspotInfo;
@@ -103,6 +106,9 @@ public class PersistentWifiTcpService extends Service {
 
             // Start Telemetry Engine (GPS + IMU + Device Status)
             telemetryEngine.start();
+
+            // Start Cloud & Messaging Layer (RabbitMQ AMQP: Cellular Real-time + Wi-Fi Batch)
+            com.example.service.amqp.AmqpCloudManager.getInstance(this).start();
 
             // Start background scheduler loop and alarm watchdog
             startAutonomousSchedulerLoop();
@@ -317,27 +323,79 @@ public class PersistentWifiTcpService extends Service {
         return START_STICKY; // Rescheduled automatically if killed by Android
     }
 
-    private void startForegroundWithProperType() {
+    public synchronized void startForegroundWithProperType() {
         Notification notification = buildNotification();
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                // API 34+: Use SPECIAL_USE and LOCATION
-                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
-                startForeground(NOTIFICATION_ID, notification, type);
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // API 29-33: Use CONNECTED_DEVICE and LOCATION
-                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
-                startForeground(NOTIFICATION_ID, notification, type);
-            } else {
-                startForeground(NOTIFICATION_ID, notification);
+        boolean hasLocPerm = hasLocationPermission();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Android 14+ (API 34+): Declared types in manifest: connectedDevice|location|specialUse
+            // connectedDevice and specialUse are normal permissions granted at install.
+            int safeBaseType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE | ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+
+            if (hasLocPerm) {
+                try {
+                    int typeWithLocation = safeBaseType | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                    startForeground(NOTIFICATION_ID, notification, typeWithLocation);
+                    logger.i(TAG, "Foreground service running with ConnectedDevice + SpecialUse + Location.");
+                    return;
+                } catch (Throwable t) {
+                    logger.w(TAG, "Notice starting FGS with type location (" + t.getMessage() + "). Falling back to safe types.");
+                }
             }
-        } catch (Throwable t) {
-            logger.w(TAG, "Notice starting foreground with type: " + t.getMessage() + ", applying fallback");
+
             try {
-                startForeground(NOTIFICATION_ID, notification);
+                startForeground(NOTIFICATION_ID, notification, safeBaseType);
+                logger.i(TAG, "Foreground service running with safe types (ConnectedDevice + SpecialUse).");
+                return;
+            } catch (Throwable t2) {
+                logger.w(TAG, "Notice starting FGS with safeBaseType: " + t2.getMessage() + ", trying connectedDevice only");
+            }
+
+            try {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
             } catch (Throwable fallbackFatal) {
                 logger.e(TAG, "Fatal startForeground fallback: " + fallbackFatal.getMessage());
             }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10-13 (API 29-33): Declared types: connectedDevice|location
+            int safeBaseType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+            if (hasLocPerm) {
+                try {
+                    int typeWithLocation = safeBaseType | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                    startForeground(NOTIFICATION_ID, notification, typeWithLocation);
+                    logger.i(TAG, "Foreground service running with ConnectedDevice + Location.");
+                    return;
+                } catch (Throwable t) {
+                    logger.w(TAG, "Notice starting FGS with type location on Q+: " + t.getMessage());
+                }
+            }
+
+            try {
+                startForeground(NOTIFICATION_ID, notification, safeBaseType);
+            } catch (Throwable fallbackFatal) {
+                logger.e(TAG, "Fatal startForeground fallback on Q+: " + fallbackFatal.getMessage());
+            }
+        } else {
+            // Android 8-9 (API 26-28)
+            try {
+                startForeground(NOTIFICATION_ID, notification);
+            } catch (Throwable fallbackFatal) {
+                logger.e(TAG, "Fatal startForeground fallback on pre-Q: " + fallbackFatal.getMessage());
+            }
+        }
+    }
+
+    public boolean hasLocationPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED ||
+               ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    public void onPermissionsGranted() {
+        startForegroundWithProperType();
+        if (telemetryEngine != null) {
+            telemetryEngine.onPermissionGranted();
         }
     }
 
@@ -410,6 +468,10 @@ public class PersistentWifiTcpService extends Service {
             telemetryEngine.stop();
             telemetryEngine = null;
         }
+
+        try {
+            com.example.service.amqp.AmqpCloudManager.getInstance(this).stop();
+        } catch (Throwable ignored) {}
 
         if (schedulerExecutor != null && !schedulerExecutor.isShutdown()) {
             schedulerExecutor.shutdownNow();

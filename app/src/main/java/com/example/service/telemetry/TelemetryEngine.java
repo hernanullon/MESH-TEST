@@ -117,6 +117,12 @@ public class TelemetryEngine {
         logger.i(TAG, "Telemetry Engine started with independent raw group buffering.");
     }
 
+    public void onPermissionGranted() {
+        if (locationCollector != null) {
+            locationCollector.retryRegistration();
+        }
+    }
+
     private String getEffectiveDeviceId() {
         String deviceId = "NODE-01";
         try {
@@ -194,6 +200,11 @@ public class TelemetryEngine {
             );
             this.latestSnapshot = snapshot;
             stateManager.setLatestTelemetrySnapshot(snapshot);
+
+            // Step 4: Dispatch 1-second snapshot to RabbitMQ Real-Time Stream (Forced Cellular SIM)
+            try {
+                com.example.service.amqp.AmqpCloudManager.getInstance(context).pushRealtimeSnapshot(snapshot);
+            } catch (Throwable ignored) {}
 
             // Supervisor check every 15 seconds
             if (seq % 15 == 0) {

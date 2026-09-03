@@ -51,6 +51,7 @@ import com.example.service.MeshStateManager
 import com.example.service.PersistentWifiTcpService
 import com.example.service.ScheduleManager
 import com.example.ui.components.LocalPersistenceBufferCard
+import com.example.ui.components.AmqpCloudCard
 import com.example.ui.theme.*
 import com.example.utils.AppLogger
 import com.example.utils.NetworkUtils
@@ -104,13 +105,25 @@ fun MainAppContainer() {
     // Permissions
     val permissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
+    ) { results ->
+        val locationGranted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                              results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (locationGranted) {
+            PersistentWifiTcpService.getInstance()?.onPermissionsGranted()
+        }
+        if (scheduleManager.isConfigured && !stateManager.isServiceRunning) {
+            startPersistentService(context)
+        }
+    }
 
     LaunchedEffect(Unit) {
         try {
             val requiredPermissions = mutableListOf<String>()
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 requiredPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requiredPermissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
@@ -1125,6 +1138,12 @@ fun ScheduleSetupScreen(
                             )
                         }
 
+                        Text(
+                            text = "RabbitMQ restricts the default 'guest' user to localhost. For remote brokers (e.g. 143.106.8.17), configure a non-guest user account.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TechTealSecondary
+                        )
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1256,13 +1275,13 @@ fun ScheduleSetupScreen(
                         Icon(Icons.Default.Sensors, contentDescription = null, tint = TechTealSecondary)
                         Column {
                             Text(
-                                text = "Sensor Sampling Rates (Tasas de Muestreo)",
+                                text = "Sensor Sampling Rates",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = TechTealSecondary
                             )
                             Text(
-                                text = "Configura la frecuencia de lectura de los sensores internos",
+                                text = "Configure reading intervals for onboard sensors",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted
                             )
@@ -1270,8 +1289,8 @@ fun ScheduleSetupScreen(
                     }
 
                     Text(
-                        text = "• GPS / Ubicación: Intervalo en segundos (mínimo y por defecto: 1s).\n" +
-                               "• Inercial / IMU: Intervalo en milisegundos (por defecto: 200ms, mín: 20ms).",
+                        text = "• GPS / Location: Interval in seconds (minimum & default: 1s).\n" +
+                               "• Inertial / IMU: Interval in milliseconds (default: 200ms, min: 20ms).",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -1283,7 +1302,7 @@ fun ScheduleSetupScreen(
                         OutlinedTextField(
                             value = locationIntervalText,
                             onValueChange = { if (it.length <= 4) locationIntervalText = it },
-                            label = { Text("GPS Rate (Segundos)") },
+                            label = { Text("GPS Rate (Seconds)") },
                             singleLine = true,
                             leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null, tint = TechTealSecondary) },
                             modifier = Modifier.weight(1f).testTag("input_location_interval")
@@ -1292,7 +1311,7 @@ fun ScheduleSetupScreen(
                         OutlinedTextField(
                             value = inertialIntervalText,
                             onValueChange = { if (it.length <= 5) inertialIntervalText = it },
-                            label = { Text("IMU Rate (Milisegundos)") },
+                            label = { Text("IMU Rate (Milliseconds)") },
                             singleLine = true,
                             leadingIcon = { Icon(Icons.Default.Explore, contentDescription = null, tint = TechTealSecondary) },
                             modifier = Modifier.weight(1f).testTag("input_inertial_interval")
@@ -1691,7 +1710,7 @@ fun TcpManagementScreen(
                                     color = TextPrimary
                                 )
                                 Text(
-                                    text = if (snapshotTimestamp != null) "Snapshot capturado a las $snapshotTimestamp" else "Muestreo bajo demanda (0% consumo en reposo)",
+                                    text = if (snapshotTimestamp != null) "Snapshot captured at $snapshotTimestamp" else "On-demand sampling (0% idle drain)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (snapshotTimestamp != null) CyberCyanPrimary else TextMuted
                                 )
@@ -1744,13 +1763,13 @@ fun TcpManagementScreen(
                             ) {
                                 Icon(Icons.Default.Speed, contentDescription = null, tint = TextMuted, modifier = Modifier.size(28.dp))
                                 Text(
-                                    text = "Actualizaciones en tiempo real desactivadas",
+                                    text = "Real-time updates disabled",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = TextPrimary
                                 )
                                 Text(
-                                    text = "Para no saturar la CPU ni la memoria del dispositivo, presione el botón 'Snapshot' para inspeccionar una muestra instantánea de GPS, Inercial y Hardware.",
+                                    text = "To minimize CPU and battery usage, tap 'Snapshot' to inspect an instant sample of GPS, Inertial, and Hardware status.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextMuted,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -2438,6 +2457,11 @@ fun TcpManagementScreen(
         // Local Persistence Buffer (Room SQLite) Card
         item {
             LocalPersistenceBufferCard(context = context)
+        }
+
+        // Cloud & Messaging Layer (RabbitMQ AMQP) Card
+        item {
+            AmqpCloudCard(context = context)
         }
 
         // System OS & Keep-Alive Settings Card
