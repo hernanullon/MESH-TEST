@@ -202,7 +202,6 @@ fun AmqpCloudCard(
                             RealtimeStreamState.AUTHENTICATING -> "AUTHENTICATING" to CyberCyanPrimary
                             RealtimeStreamState.RETRY_BACKOFF -> "BACKOFF WAIT" to StatusWarning
                             RealtimeStreamState.PAUSED -> "STANDBY (Wi-Fi ACTIVE)" to TextMuted
-                            RealtimeStreamState.AUTH_ERROR -> "AUTH REFUSED (403)" to StatusError
                             RealtimeStreamState.ERROR -> "ERROR" to StatusError
                             RealtimeStreamState.IDLE -> "IDLE" to TextMuted
                         }
@@ -292,11 +291,14 @@ fun AmqpCloudCard(
                     }
 
                     // Error banner if applicable
-                    if (realtimeStats.lastError != null && (realtimeStats.state == RealtimeStreamState.ERROR || realtimeStats.state == RealtimeStreamState.AUTH_ERROR)) {
+                    val currentRealtimeError = realtimeStats.lastError
+                    if (currentRealtimeError != null && realtimeStats.state == RealtimeStreamState.ERROR) {
+                        val isMobileNetworkError = currentRealtimeError.startsWith("[Mobile Network]")
+                        val bannerColor = if (isMobileNetworkError) StatusWarning else StatusError
                         Surface(
-                            color = StatusError.copy(alpha = 0.12f),
+                            color = bannerColor.copy(alpha = 0.12f),
                             shape = RoundedCornerShape(6.dp),
-                            border = BorderStroke(1.dp, StatusError.copy(alpha = 0.3f)),
+                            border = BorderStroke(1.dp, bannerColor.copy(alpha = 0.35f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -304,11 +306,17 @@ fun AmqpCloudCard(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Warning, contentDescription = null, tint = StatusError, modifier = Modifier.size(16.dp))
+                                Icon(
+                                    imageVector = if (isMobileNetworkError) Icons.Default.SignalCellularConnectedNoInternet0Bar else Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = bannerColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
                                 Text(
-                                    text = realtimeStats.lastError ?: "Connection failure",
+                                    text = currentRealtimeError,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = StatusError
+                                    fontWeight = FontWeight.Medium,
+                                    color = bannerColor
                                 )
                             }
                         }
@@ -361,7 +369,6 @@ fun AmqpCloudCard(
                             BatchDischargeState.AWAITING_WIFI -> "AWAITING WI-FI" to StatusWarning
                             BatchDischargeState.CONNECTING -> "CONNECTING" to CyberCyanPrimary
                             BatchDischargeState.COMPLETED -> "ALL SYNCED" to StatusActive
-                            BatchDischargeState.AUTH_ERROR -> "AUTH REFUSED (403)" to StatusError
                             BatchDischargeState.ERROR -> "ERROR" to StatusError
                             BatchDischargeState.IDLE -> "STANDBY" to TextMuted
                         }
@@ -426,28 +433,6 @@ fun AmqpCloudCard(
                         )
                     }
 
-                    if (batchStats.lastError != null && (batchStats.state == BatchDischargeState.ERROR || batchStats.state == BatchDischargeState.AUTH_ERROR)) {
-                        Surface(
-                            color = StatusError.copy(alpha = 0.12f),
-                            shape = RoundedCornerShape(6.dp),
-                            border = BorderStroke(1.dp, StatusError.copy(alpha = 0.3f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Warning, contentDescription = null, tint = StatusError, modifier = Modifier.size(16.dp))
-                                Text(
-                                    text = batchStats.lastError ?: "Batch discharge error",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = StatusError
-                                )
-                            }
-                        }
-                    }
-
                     if (batchStats.lastDischargeTimestamp > 0) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -471,6 +456,38 @@ fun AmqpCloudCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = TextMuted
                         )
+                    }
+
+                    // Error banner for batch discharge
+                    val currentBatchError = batchStats.lastError
+                    if (currentBatchError != null && batchStats.state == BatchDischargeState.ERROR) {
+                        val isWifiNetError = currentBatchError.startsWith("[Wi-Fi Network]")
+                        val bannerColor = if (isWifiNetError) StatusWarning else StatusError
+                        Surface(
+                            color = bannerColor.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, bannerColor.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = bannerColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = currentBatchError,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = bannerColor
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -73,22 +73,21 @@ class AmqpCloudManager private constructor(context: Context) {
      * Manually triggers bulk discharge of offline records over Wi-Fi.
      */
     fun triggerBatchDischarge() {
-        batchDischarger.triggerBatchDischarge(forceManual = true)
+        batchDischarger.triggerBatchDischarge()
     }
 
     /**
      * Called when the autonomous schedule opens or closes the Wi-Fi active window.
-     * When Wi-Fi is active (discharge window): pauses Real-time SIM stream and engages batch discharge.
+     * When Wi-Fi is active (discharge window): pauses Real-time SIM stream and starts batch discharge.
      * When Wi-Fi is inactive (field/local mesh window): resumes Real-time SIM stream.
      */
     fun onWifiWindowActive(active: Boolean) {
         if (active) {
-            logger.s(TAG, "Wi-Fi discharge window active! Pausing Real-Time SIM stream & engaging bulk AMQP discharger...")
+            logger.s(TAG, "Wi-Fi discharge window active! Pausing Real-Time SIM stream & auto-triggering bulk AMQP upload...")
             realtimeTransmitter.pause()
-            batchDischarger.onWifiWindowActive(true)
+            batchDischarger.triggerBatchDischarge()
         } else {
-            logger.s(TAG, "Wi-Fi discharge window ended. Disengaging bulk AMQP discharger & resuming Real-Time SIM stream...")
-            batchDischarger.onWifiWindowActive(false)
+            logger.s(TAG, "Wi-Fi discharge window ended. Resuming Real-Time SIM stream...")
             realtimeTransmitter.resume()
         }
     }

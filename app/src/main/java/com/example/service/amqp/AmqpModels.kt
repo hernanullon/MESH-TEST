@@ -13,7 +13,6 @@ enum class RealtimeStreamState {
     STREAMING,
     RETRY_BACKOFF,
     PAUSED,
-    AUTH_ERROR,
     ERROR
 }
 
@@ -27,30 +26,7 @@ enum class BatchDischargeState {
     DISCHARGING,
     CONFIRMING,
     COMPLETED,
-    AUTH_ERROR,
     ERROR
-}
-
-/**
- * Detects whether an exception is due to AMQP credentials or access refusal (e.g. ACCESS_REFUSED / 403),
- * which requires credential reconfiguration rather than aggressive rapid retries.
- */
-fun isAmqpAuthFailure(t: Throwable?): Boolean {
-    var curr: Throwable? = t
-    while (curr != null) {
-        val name = curr.javaClass.simpleName
-        val msg = curr.message ?: ""
-        if (name.contains("AuthenticationFailure", ignoreCase = true) ||
-            name.contains("PossibleAuthenticationFailure", ignoreCase = true) ||
-            msg.contains("ACCESS_REFUSED", ignoreCase = true) ||
-            msg.contains("Login was refused", ignoreCase = true) ||
-            msg.contains("reply-code=403", ignoreCase = true)
-        ) {
-            return true
-        }
-        curr = curr.cause
-    }
-    return false
 }
 
 /**

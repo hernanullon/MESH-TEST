@@ -101,6 +101,7 @@ fun MainAppContainer() {
     var logs by remember { mutableStateOf(logger.logs) }
     var config by remember { mutableStateOf(scheduleManager.config) }
     var telemetrySnapshot by remember { mutableStateOf(stateManager.latestTelemetrySnapshot) }
+    var showGlobalResetDialog by remember { mutableStateOf(false) }
 
     // Permissions
     val permissionsLauncher = rememberLauncherForActivityResult(
@@ -256,6 +257,16 @@ fun MainAppContainer() {
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { showGlobalResetDialog = true },
+                        modifier = Modifier.testTag("action_restore_app")
+                    ) {
+                        Icon(
+                            Icons.Default.RestartAlt,
+                            contentDescription = "Restaurar app a punto inicial",
+                            tint = StatusWarning
+                        )
+                    }
                     if (currentScreen == 1) {
                         IconButton(
                             onClick = { currentScreen = 0 },
@@ -328,6 +339,47 @@ fun MainAppContainer() {
                     )
                 }
             }
+        }
+
+        if (showGlobalResetDialog) {
+            AlertDialog(
+                onDismissRequest = { showGlobalResetDialog = false },
+                containerColor = DarkSurface,
+                titleContentColor = StatusWarning,
+                textContentColor = TextPrimary,
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.RestartAlt, contentDescription = null, tint = StatusWarning)
+                        Text("Restaurar App al Punto Inicial")
+                    }
+                },
+                text = {
+                    Text(
+                        "¿Deseas restaurar la aplicación al punto inicial de configuración? Se restablecerán todos los horarios, credenciales y parámetros a los valores de fábrica predeterminados y volverás a la pantalla de configuración inicial.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showGlobalResetDialog = false
+                            scheduleManager.resetConfiguration()
+                            config = scheduleManager.config
+                            currentScreen = 0
+                            Toast.makeText(context, "App restaurada al punto inicial", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = StatusWarning)
+                    ) {
+                        Text("Sí, Restaurar", fontWeight = FontWeight.Bold, color = DarkBackground)
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { showGlobalResetDialog = false }) {
+                        Text("Cancelar", color = TextPrimary)
+                    }
+                }
+            )
         }
     }
 }
@@ -1137,12 +1189,6 @@ fun ScheduleSetupScreen(
                                 modifier = Modifier.weight(1f).testTag("input_amqp_pass")
                             )
                         }
-
-                        Text(
-                            text = "RabbitMQ restricts the default 'guest' user to localhost. For remote brokers (e.g. 143.106.8.17), configure a non-guest user account.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TechTealSecondary
-                        )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),

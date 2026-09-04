@@ -74,7 +74,6 @@ class AmqpRealtimeTransmitter(private val context: Context) {
     private val isConnecting = AtomicBoolean(false)
     private val shouldRun = AtomicBoolean(false)
     private val isPaused = AtomicBoolean(false)
-    private val isAuthRefused = AtomicBoolean(false)
 
     private val packetsSentCounter = AtomicLong(0)
     private val packetsDroppedCounter = AtomicLong(0)
@@ -148,10 +147,7 @@ class AmqpRealtimeTransmitter(private val context: Context) {
         val changed = this.connectionParams != params
         this.connectionParams = params
         if (changed) {
-            isAuthRefused.set(false)
-            consecutiveFailures = 0
             logger.i(TAG, "AMQP connection params updated. Reconnecting to ${params.host}:${params.port}...")
-            abortConnectionSafely()
             triggerConnectionAttempt(forceImmediate = true)
         }
     }
@@ -210,7 +206,6 @@ class AmqpRealtimeTransmitter(private val context: Context) {
      */
     fun forceReconnect() {
         logger.s(TAG, "Manual/Forced Reconnection requested. Resetting AMQP sockets & state...")
-        isAuthRefused.set(false)
         consecutiveFailures = 0
         abortConnectionSafely()
         triggerConnectionAttempt(forceImmediate = true)
@@ -234,7 +229,7 @@ class AmqpRealtimeTransmitter(private val context: Context) {
         } catch (t: Throwable) {
             logger.e(TAG, "Failed to request cellular network: ${t.message}")
             _stats.value = _stats.value.copy(
-                lastError = "Cellular request failed: ${t.message}",
+                lastError = "[Mobile Network] Cellular radio unavailable on device",
                 state = RealtimeStreamState.ERROR
             )
         }
@@ -308,7 +303,7 @@ class AmqpRealtimeTransmitter(private val context: Context) {
     }
 
     private fun triggerConnectionAttempt(forceImmediate: Boolean) {
-        if (!shouldRun.get() || isPaused.get() || isAuthRefused.get()) return
+        if (!shouldRun.get() || isPaused.get()) return
         if (isConnecting.get()) return
 
         transmitterScope.launch {
@@ -414,35 +409,21 @@ class AmqpRealtimeTransmitter(private val context: Context) {
                 activeRoutingKey = connectionParams.getRealtimeRoutingKey()
             )
         } catch (t: Throwable) {
-            val isAuth = isAmqpAuthFailure(t)
-            val errorMsg = t.message ?: t.javaClass.simpleName
+            consecutiveFailures++
+            errorCounter.incrementAndGet()
+            val rawMsg = t.message ?: t.javaClass.simpleName
+            val classifiedError = AmqpErrorClassifier.classifyRealtimeError(t)
+            logger.e(TAG, "AMQP connection attempt failed ($classifiedError): $rawMsg")
 
-            if (isAuth) {
-                isAuthRefused.set(true)
-                logger.w(TAG, "AMQP Broker refused authentication (ACCESS_REFUSED): $errorMsg. Note: default 'guest' user is prohibited from remote hosts. Reconnect suspended until credentials are updated in settings.")
-                _stats.value = _stats.value.copy(
-                    state = RealtimeStreamState.AUTH_ERROR,
-                    errorCount = errorCounter.incrementAndGet(),
-                    lastError = "Auth Refused (ACCESS_REFUSED): Remote 'guest' login prohibited on broker ($errorMsg). Configure credentials in Settings.",
-                    consecutiveFailures = consecutiveFailures
-                )
-                abortConnectionSafely()
-                return
-            } else {
-                consecutiveFailures++
-                errorCounter.incrementAndGet()
-                logger.e(TAG, "AMQP connection attempt failed: $errorMsg")
+            _stats.value = _stats.value.copy(
+                state = RealtimeStreamState.ERROR,
+                errorCount = errorCounter.get(),
+                lastError = classifiedError,
+                consecutiveFailures = consecutiveFailures
+            )
 
-                _stats.value = _stats.value.copy(
-                    state = RealtimeStreamState.ERROR,
-                    errorCount = errorCounter.get(),
-                    lastError = errorMsg,
-                    consecutiveFailures = consecutiveFailures
-                )
-
-                abortConnectionSafely()
-                triggerConnectionAttempt(forceImmediate = false)
-            }
+            abortConnectionSafely()
+            triggerConnectionAttempt(forceImmediate = false)
         } finally {
             isConnecting.set(false)
         }
@@ -463,7 +444,7 @@ class AmqpRealtimeTransmitter(private val context: Context) {
     }
 
     private fun runWatchdogCheck() {
-        if (!shouldRun.get() || isPaused.get() || isAuthRefused.get()) return
+        if (!shouldRun.get() || isPaused.get()) return
 
         val network = currentCellularNetwork
         val conn = amqpConnection

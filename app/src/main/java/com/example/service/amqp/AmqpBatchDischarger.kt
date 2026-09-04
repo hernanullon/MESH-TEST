@@ -57,8 +57,6 @@ class AmqpBatchDischarger(
 
     private val isDischarging = AtomicBoolean(false)
     private val shouldRun = AtomicBoolean(false)
-    private val isWifiWindowActive = AtomicBoolean(false)
-    private val isAuthRefused = AtomicBoolean(false)
 
     private val totalDischargedCounter = AtomicLong(0)
     private val confirmsReceivedCounter = AtomicLong(0)
@@ -80,8 +78,8 @@ class AmqpBatchDischarger(
                 state = if (isDischarging.get()) BatchDischargeState.CONNECTING else BatchDischargeState.IDLE
             )
 
-            // Auto-trigger discharge ONLY if Wi-Fi discharge window is active according to schedule
-            if (shouldRun.get() && isWifiWindowActive.get() && !isDischarging.get() && !isAuthRefused.get()) {
+            // Auto-trigger discharge if Wi-Fi window is active and there are pending records
+            if (shouldRun.get() && !isDischarging.get()) {
                 triggerBatchDischarge()
             }
         }
@@ -115,30 +113,8 @@ class AmqpBatchDischarger(
         refreshPendingCount()
     }
 
-    fun onWifiWindowActive(active: Boolean) {
-        isWifiWindowActive.set(active)
-        if (active) {
-            if (shouldRun.get() && currentWifiNetwork != null && !isDischarging.get() && !isAuthRefused.get()) {
-                triggerBatchDischarge()
-            }
-        } else {
-            dischargeJob?.cancel()
-            _stats.value = _stats.value.copy(
-                state = BatchDischargeState.IDLE,
-                isDischarging = false
-            )
-        }
-    }
-
     fun updateParams(params: AmqpConnectionParams) {
-        val changed = this.connectionParams != params
         this.connectionParams = params
-        if (changed) {
-            isAuthRefused.set(false)
-            if (isWifiWindowActive.get() && currentWifiNetwork != null) {
-                triggerBatchDischarge()
-            }
-        }
     }
 
     fun refreshPendingCount() {
@@ -153,19 +129,8 @@ class AmqpBatchDischarger(
     /**
      * Manually triggers bulk discharge of all unsynced records via Wi-Fi.
      */
-    fun triggerBatchDischarge(forceManual: Boolean = false) {
+    fun triggerBatchDischarge() {
         if (!shouldRun.get()) return
-        if (!forceManual && !isWifiWindowActive.get()) {
-            logger.i(TAG, "Wi-Fi discharge window is inactive according to schedule. Batch discharge deferred.")
-            return
-        }
-        if (isAuthRefused.get() && !forceManual) {
-            logger.w(TAG, "Batch discharge skipped: Broker authentication was refused. Configure valid credentials.")
-            return
-        }
-        if (forceManual) {
-            isAuthRefused.set(false)
-        }
         if (isDischarging.get()) {
             logger.i(TAG, "Batch discharge already in progress.")
             return
@@ -347,22 +312,13 @@ class AmqpBatchDischarger(
             )
             logger.s(TAG, "Batch discharge session finished cleanly.")
         } catch (t: Throwable) {
-            val isAuth = isAmqpAuthFailure(t)
-            val errorMsg = t.message ?: t.javaClass.simpleName
-            if (isAuth) {
-                isAuthRefused.set(true)
-                logger.w(TAG, "Batch discharge AMQP authentication refused ($errorMsg). Remote 'guest' login is prohibited by default on RabbitMQ. Reconnect suspended until credentials are updated in settings.")
-                _stats.value = _stats.value.copy(
-                    state = BatchDischargeState.AUTH_ERROR,
-                    lastError = "Auth Refused (ACCESS_REFUSED): Remote 'guest' login prohibited by broker ($errorMsg). Configure credentials in Settings."
-                )
-            } else {
-                logger.e(TAG, "Batch discharge failed: $errorMsg")
-                _stats.value = _stats.value.copy(
-                    state = BatchDischargeState.ERROR,
-                    lastError = errorMsg
-                )
-            }
+            val rawMsg = t.message ?: t.javaClass.simpleName
+            val classifiedError = AmqpErrorClassifier.classifyBatchError(t)
+            logger.e(TAG, "Batch discharge failed ($classifiedError): $rawMsg")
+            _stats.value = _stats.value.copy(
+                state = BatchDischargeState.ERROR,
+                lastError = classifiedError
+            )
         } finally {
             try {
                 channel?.close()
