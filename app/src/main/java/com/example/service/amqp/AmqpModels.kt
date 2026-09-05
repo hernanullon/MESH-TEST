@@ -111,25 +111,26 @@ data class AmqpConnectionParams(
 
     fun getRealtimeRoutingKey(): String {
         val cleanKey = baseRoutingKey.trim()
-        val cleanDev = deviceId.trim().ifEmpty { "NODE-01" }
         return if (cleanKey.endsWith(".")) {
-            "${cleanKey}realtime.$cleanDev"
+            "${cleanKey}realtime"
         } else if (cleanKey.isNotEmpty()) {
-            "$cleanKey.realtime.$cleanDev"
+            "$cleanKey.realtime"
         } else {
-            "telemetry.realtime.$cleanDev"
+            "telemetry.realtime"
         }
     }
 
-    fun getBatchRoutingKey(): String {
+    fun getBatchRoutingKey(subType: String = ""): String {
         val cleanKey = baseRoutingKey.trim()
-        val cleanDev = deviceId.trim().ifEmpty { "NODE-01" }
+        val suffix = subType.trim().lowercase()
+        val leaf = if (suffix.isNotEmpty()) suffix else "batch"
+
         return if (cleanKey.endsWith(".")) {
-            "${cleanKey}batch.$cleanDev"
+            "$cleanKey$leaf"
         } else if (cleanKey.isNotEmpty()) {
-            "$cleanKey.batch.$cleanDev"
+            "$cleanKey.$leaf"
         } else {
-            "telemetry.batch.$cleanDev"
+            "telemetry.$leaf"
         }
     }
 }

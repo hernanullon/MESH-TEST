@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import com.example.data.local.TelemetryBufferRepository
+import com.example.data.local.TelemetryRecordEntity
 import com.example.utils.AppLogger
 import com.rabbitmq.client.AMQP
 import com.rabbitmq.client.Channel
@@ -221,7 +222,6 @@ class AmqpBatchDischarger(
             channel.confirmSelect()
 
             val exchange = connectionParams.exchange
-            val routingKey = connectionParams.getBatchRoutingKey()
 
             // Passive check or declare exchange
             try {
@@ -240,7 +240,7 @@ class AmqpBatchDischarger(
             var hasMore = true
 
             while (hasMore && shouldRun.get() && dischargerScope.isActive) {
-                val unsyncedList = bufferRepository.getUnsyncedBatch(batchSize)
+                val unsyncedList: List<TelemetryRecordEntity> = bufferRepository.getUnsyncedBatch(batchSize)
                 if (unsyncedList.isEmpty()) {
                     hasMore = false
                     break
@@ -254,22 +254,29 @@ class AmqpBatchDischarger(
                 logger.i(TAG, "Publishing chunk of ${unsyncedList.size} records with Publisher Confirms...")
 
                 // Publish each record in batch
-                for (record in unsyncedList) {
+                for (i in unsyncedList.indices) {
+                    val record = unsyncedList[i]
                     val payloadBytes = record.payloadJson.toByteArray(Charsets.UTF_8)
+                    
+                    // Determine exact sub-type for queue routing (e.g. location, inertial, device, can, data)
+                    val subType = resolveRecordSubType(record)
+                    val specificRoutingKey = connectionParams.getBatchRoutingKey(subType)
+
                     val props = AMQP.BasicProperties.Builder()
                         .deliveryMode(2) // Persistent delivery
                         .contentType("application/json")
-                        .type(record.sourceType)
+                        .type(subType)
                         .messageId(record.id.toString())
                         .timestamp(Date(record.timestamp))
                         .headers(mapOf(
                             "device_id" to record.deviceId,
-                            "packet_type" to record.packetType,
-                            "source_type" to record.sourceType
+                            "packet_type" to record.packetType.lowercase(),
+                            "source_type" to record.sourceType.lowercase(),
+                            "type" to subType
                         ))
                         .build()
 
-                    channel.basicPublish(exchange, routingKey, props, payloadBytes)
+                    channel.basicPublish(exchange, specificRoutingKey, props, payloadBytes)
                 }
 
                 _stats.value = _stats.value.copy(state = BatchDischargeState.CONFIRMING)
@@ -278,7 +285,7 @@ class AmqpBatchDischarger(
                 val confirmed = channel.waitForConfirms(12000)
 
                 if (confirmed) {
-                    val ids = unsyncedList.map { it.id }
+                    val ids: List<Long> = unsyncedList.map { entity -> entity.id }
                     bufferRepository.markAsSynced(ids)
 
                     val total = totalDischargedCounter.addAndGet(unsyncedList.size.toLong())
@@ -357,6 +364,30 @@ class AmqpBatchDischarger(
         sharedExecutor = null
 
         _stats.value = BatchStats(state = BatchDischargeState.IDLE)
+    }
+
+    private fun resolveRecordSubType(record: TelemetryRecordEntity): String {
+        // 1. Try to extract "type" directly from JSON payload if present
+        try {
+            val json = org.json.JSONObject(record.payloadJson)
+            val jsonType = json.optString("type", "").trim().lowercase()
+            if (jsonType.isNotEmpty() && jsonType != "batch" && jsonType != "realtime") {
+                return jsonType
+            }
+        } catch (ignored: Throwable) {}
+
+        // 2. Fallback to record metadata
+        val src = record.sourceType.trim().uppercase()
+        val pkt = record.packetType.trim().lowercase()
+
+        return when {
+            src == "LOCATION" -> "location"
+            src == "INERTIAL" -> "inertial"
+            src == "DEVICE" || src == "DEVICE_STATUS" -> "device"
+            pkt.isNotEmpty() -> pkt
+            src.isNotEmpty() -> src.lowercase()
+            else -> "batch"
+        }
     }
 
     companion object {

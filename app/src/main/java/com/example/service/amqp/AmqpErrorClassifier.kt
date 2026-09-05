@@ -18,77 +18,89 @@ object AmqpErrorClassifier {
      * Translates exceptions occurring during Cellular Real-Time AMQP streaming.
      */
     fun classifyRealtimeError(t: Throwable): String {
-        val root = getRootCause(t)
-        val msg = root.message ?: root.javaClass.simpleName
-        val msgLower = msg.lowercase()
+        // Collect full exception chain messages to inspect both top-level and causes
+        val chain = mutableListOf<Throwable>()
+        var curr: Throwable? = t
+        while (curr != null && !chain.contains(curr)) {
+            chain.add(curr)
+            curr = curr.cause
+        }
+
+        val allMessages = chain.joinToString(" ") { it.message ?: it.javaClass.simpleName }.lowercase()
+        val root = chain.last()
+        val rootMsg = (root.message ?: root.javaClass.simpleName).lowercase()
 
         // --- 1. SMARTPHONE MOBILE NETWORK / INTERNET ISSUES ---
 
-        // Specific user scenario: Mobile data on, SIM active with IP, but no credit/plan or carrier firewall (connection timeout)
-        if (root is SocketTimeoutException || msgLower.contains("timed out") || msgLower.contains("after 8000ms") || msgLower.contains("after 10000ms")) {
+        // A. TIMEOUT: Sockets waiting 8000ms / 10000ms with no answer from carrier or internet
+        if (chain.any { it is SocketTimeoutException } ||
+            allMessages.contains("timed out") ||
+            allMessages.contains("after 8000ms") ||
+            allMessages.contains("after 10000ms") ||
+            allMessages.contains("timeout")) {
             return "[Mobile Network] No Internet access (Connection timed out - check mobile data plan/balance)"
         }
 
-        // Hostname / DNS resolution failure (no cellular internet or invalid host)
-        if (root is UnknownHostException) {
+        // B. DNS / Hostname resolution failure
+        if (chain.any { it is UnknownHostException } || allMessages.contains("unknownhost")) {
             return "[Mobile Network] No Internet access (Cannot resolve broker host)"
         }
 
-        // Network unreachable or route unavailable
-        if (root is NoRouteToHostException || msgLower.contains("enetunreach") || msgLower.contains("network is unreachable")) {
-            return "[Mobile Network] Cellular network unreachable"
+        // C. Network or Host Unreachable
+        if (chain.any { it is NoRouteToHostException } ||
+            allMessages.contains("enetunreach") ||
+            allMessages.contains("network is unreachable") ||
+            allMessages.contains("ehostunreach") ||
+            allMessages.contains("no route to host")) {
+            return "[Mobile Network] Cellular network unreachable (No Internet route)"
         }
 
-        // Carrier dropped route or route not found
-        if (msgLower.contains("ehostunreach") || msgLower.contains("no route to host")) {
-            return "[Mobile Network] No Internet route on mobile data"
-        }
-
-        // Socket binding error on cellular interface
-        if (msgLower.contains("bind failed") || msgLower.contains("ebadf")) {
+        // D. Cellular interface binding failure
+        if (allMessages.contains("bind failed") || allMessages.contains("ebadf")) {
             return "[Mobile Network] Failed to bind to cellular interface"
         }
 
-        // --- 2. BROKER / RABBITMQ ISSUES (Internet is reachable, but broker fails) ---
+        // --- 2. BROKER / RABBITMQ ISSUES (Internet exists, but broker server rejects/fails) ---
 
-        // Port closed or service down on server (TCP RST returned by server/firewall)
-        if (root is ConnectException || msgLower.contains("connection refused") || msgLower.contains("econnrefused")) {
+        // A. TCP RST / Connection Refused (Only when explicit refusal occurs, NOT timeout)
+        if (chain.any { it is ConnectException } || allMessages.contains("connection refused") || allMessages.contains("econnrefused")) {
+            // Note: If ConnectException contained "timed out", it is already caught above!
             return "[Broker Error] Server unreachable or port closed"
         }
 
-        // AMQP Authentication failure (invalid credentials)
-        if (msgLower.contains("possibleauthenticationfailure") ||
-            msgLower.contains("authentication") ||
-            msgLower.contains("access_refused") ||
-            msgLower.contains("530")) {
+        // B. AMQP Authentication / Credentials
+        if (allMessages.contains("possibleauthenticationfailure") ||
+            allMessages.contains("authentication") ||
+            allMessages.contains("access_refused") ||
+            allMessages.contains("530")) {
             return "[Broker Error] Invalid username or password"
         }
 
-        // Virtual host not found or unauthorized
-        if (msgLower.contains("vhost") || msgLower.contains("not_allowed") || msgLower.contains("not allowed")) {
+        // C. Virtual host error
+        if (allMessages.contains("vhost") || allMessages.contains("not_allowed") || allMessages.contains("not allowed")) {
             return "[Broker Error] Virtual host not found or unauthorized"
         }
 
-        // Exchange not found or invalid
-        if (msgLower.contains("no exchange") || msgLower.contains("not_found") || msgLower.contains("404")) {
+        // D. Exchange error
+        if (allMessages.contains("no exchange") || allMessages.contains("not_found") || allMessages.contains("404")) {
             return "[Broker Error] Exchange not found on server"
         }
 
-        // SSL / TLS handshake failure
-        if (msgLower.contains("ssl") || msgLower.contains("handshake") || msgLower.contains("certificate")) {
+        // E. SSL / TLS handshake
+        if (allMessages.contains("ssl") || allMessages.contains("handshake") || allMessages.contains("certificate")) {
             return "[Broker Error] SSL/TLS handshake failed"
         }
 
-        // Connection reset by peer (server closed socket)
-        if (root is SocketException && (msgLower.contains("reset by peer") || msgLower.contains("econnreset") || msgLower.contains("broken pipe"))) {
+        // F. Socket closed / reset by server
+        if (allMessages.contains("reset by peer") || allMessages.contains("econnreset") || allMessages.contains("broken pipe")) {
             return "[Broker Error] Connection reset by server"
         }
 
-        // Generic fallback with clean prefix
-        return if (msgLower.contains("network") || msgLower.contains("socket") || msgLower.contains("route")) {
-            "[Mobile Network] No Internet access: $msg"
+        // Fallback: If contains socket/network keyword, label as mobile network; otherwise broker
+        return if (allMessages.contains("socket") || allMessages.contains("network") || allMessages.contains("carrier")) {
+            "[Mobile Network] Cellular network error: ${root.message ?: root.javaClass.simpleName}"
         } else {
-            "[Broker Error] Connection failed: $msg"
+            "[Broker Error] Connection failed: ${root.message ?: root.javaClass.simpleName}"
         }
     }
 

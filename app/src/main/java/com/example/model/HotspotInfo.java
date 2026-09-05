@@ -51,6 +51,10 @@ public class HotspotInfo {
         return state == State.RUNNING;
     }
 
+    public boolean isEnabled() {
+        return state == State.RUNNING || state == State.STARTING;
+    }
+
     public String getSsid() {
         return ssid;
     }

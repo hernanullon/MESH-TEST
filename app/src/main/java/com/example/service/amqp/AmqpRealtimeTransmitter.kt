@@ -83,6 +83,12 @@ class AmqpRealtimeTransmitter(private val context: Context) {
     private var consecutiveFailures = 0
 
     @Volatile
+    private var isNetworkRegistered = false
+
+    @Volatile
+    private var isRecyclingCellularNetwork = false
+
+    @Volatile
     private var connectionParams: AmqpConnectionParams = AmqpConnectionParams.fromScheduleConfig(null)
 
     // Network Callback for Cellular Interface
@@ -101,6 +107,18 @@ class AmqpRealtimeTransmitter(private val context: Context) {
             // Reset backoff upon network recovery and attempt immediate connection (unless paused by Wi-Fi window)
             consecutiveFailures = 0
             if (!isPaused.get()) {
+                triggerConnectionAttempt(forceImmediate = true)
+            }
+        }
+
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            val isValidated = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            logger.i(TAG, "Cellular capabilities changed: internet=$hasInternet, validated=$isValidated")
+
+            // If Android just validated the network (e.g., after user topped up data), immediately attempt connection!
+            if (hasInternet && !isPaused.get() && amqpConnection?.isOpen != true) {
+                logger.s(TAG, "Cellular network validation updated by OS. Triggering connection attempt...")
                 triggerConnectionAttempt(forceImmediate = true)
             }
         }
@@ -208,7 +226,55 @@ class AmqpRealtimeTransmitter(private val context: Context) {
         logger.s(TAG, "Manual/Forced Reconnection requested. Resetting AMQP sockets & state...")
         consecutiveFailures = 0
         abortConnectionSafely()
-        triggerConnectionAttempt(forceImmediate = true)
+        recycleCellularNetwork()
+    }
+
+    /**
+     * Unregisters and re-requests the Cellular network from Android OS.
+     * This forces Android to negotiate fresh PDP/APN context and re-evaluate carrier data access.
+     */
+    private fun recycleCellularNetwork() {
+        if (connectivityManager == null) return
+        if (isRecyclingCellularNetwork) return
+        isRecyclingCellularNetwork = true
+
+        transmitterScope.launch {
+            try {
+                logger.w(TAG, "AUTONOMIC RECOVERY: Recycling cellular network registration with Android OS...")
+                
+                // Report to Android that current cellular network connectivity is dead,
+                // forcing Android's internal NetworkMonitor to re-probe the carrier captive portal / DNS.
+                currentCellularNetwork?.let { net ->
+                    try {
+                        connectivityManager.reportNetworkConnectivity(net, false)
+                        logger.i(TAG, "Reported network connectivity failure to OS for network $net")
+                    } catch (ignored: Throwable) {}
+                }
+
+                if (isNetworkRegistered) {
+                    try {
+                        connectivityManager.unregisterNetworkCallback(cellularNetworkCallback)
+                    } catch (ignored: Throwable) {}
+                    isNetworkRegistered = false
+                }
+
+                currentCellularNetwork = null
+                _stats.value = _stats.value.copy(
+                    cellularAvailable = false,
+                    state = RealtimeStreamState.AWAITING_CELLULAR,
+                    networkInterfaceName = "Refreshing Radio..."
+                )
+
+                // Give Android OS stack 2 seconds to release the stale PDP context
+                delay(2000)
+
+                registerCellularNetwork()
+            } catch (t: Throwable) {
+                logger.e(TAG, "Error while recycling cellular network: ${t.message}")
+            } finally {
+                isRecyclingCellularNetwork = false
+            }
+        }
     }
 
     private fun registerCellularNetwork() {
@@ -218,6 +284,12 @@ class AmqpRealtimeTransmitter(private val context: Context) {
         }
 
         try {
+            if (isNetworkRegistered) {
+                try {
+                    connectivityManager.unregisterNetworkCallback(cellularNetworkCallback)
+                } catch (ignored: Throwable) {}
+            }
+
             val request = NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -225,9 +297,11 @@ class AmqpRealtimeTransmitter(private val context: Context) {
 
             _stats.value = _stats.value.copy(state = RealtimeStreamState.AWAITING_CELLULAR)
             connectivityManager.requestNetwork(request, cellularNetworkCallback)
+            isNetworkRegistered = true
             logger.i(TAG, "Cellular network request registered with ConnectivityManager.")
         } catch (t: Throwable) {
             logger.e(TAG, "Failed to request cellular network: ${t.message}")
+            isNetworkRegistered = false
             _stats.value = _stats.value.copy(
                 lastError = "[Mobile Network] Cellular radio unavailable on device",
                 state = RealtimeStreamState.ERROR
@@ -271,7 +345,7 @@ class AmqpRealtimeTransmitter(private val context: Context) {
             val props = AMQP.BasicProperties.Builder()
                 .deliveryMode(1) // Non-persistent for real-time snapshots (SQLite holds raw persistent records)
                 .contentType("application/json")
-                .type("TELEMETRY_SNAPSHOT")
+                .type("realtime")
                 .timestamp(Date(snapshot.timestamp))
                 .appId("LocalMesh-Android")
                 .build()
@@ -423,7 +497,17 @@ class AmqpRealtimeTransmitter(private val context: Context) {
             )
 
             abortConnectionSafely()
-            triggerConnectionAttempt(forceImmediate = false)
+
+            // Autonomic Escalation:
+            // If we have failed multiple consecutive times (e.g. 4+ times), the carrier PDP context
+            // or socket binding is likely stale (e.g. user recently refilled balance/data plan).
+            // Recycle cellular network with Android OS instead of an ordinary socket retry.
+            if (consecutiveFailures % 4 == 0) {
+                logger.w(TAG, "Autonomic Escalation: $consecutiveFailures consecutive failures. Cycling cellular registration...")
+                recycleCellularNetwork()
+            } else {
+                triggerConnectionAttempt(forceImmediate = false)
+            }
         } finally {
             isConnecting.set(false)
         }

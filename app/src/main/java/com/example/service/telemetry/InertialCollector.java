@@ -33,10 +33,12 @@ public class InertialCollector implements SensorEventListener {
     // Filtered Telemetry Values
     private float accelX = 0f, accelY = 0f, accelZ = 9.8f;
     private float gyroX = 0f, gyroY = 0f, gyroZ = 0f;
+    private float magX = 0f, magY = 0f, magZ = 0f;
     private float pitch = 0f, roll = 0f, yaw = 0f;
 
     private boolean isAccelActive = false;
     private boolean isGyroActive = false;
+    private boolean isMagActive = false;
     private boolean isOrientActive = false;
 
     // Matrix buffers for orientation calculation
@@ -106,16 +108,22 @@ public class InertialCollector implements SensorEventListener {
             if (rotationVector != null) {
                 isOrientActive = sensorManager.registerListener(this, rotationVector, delayUs);
                 logger.i(TAG, "Rotation Vector sensor registered for 3D orientation (" + delayUs + "µs)");
-            } else {
-                // Fallback to Magnetometer for orientation calculation
-                magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
-                if (magnetometer != null) {
-                    sensorManager.registerListener(this, magnetometer, delayUs);
-                    logger.i(TAG, "Magnetometer registered as orientation fallback (" + delayUs + "µs)");
-                }
             }
         } catch (Throwable t) {
-            logger.w(TAG, "Error registering orientation sensors: " + t.getMessage());
+            logger.w(TAG, "Error registering orientation sensor: " + t.getMessage());
+        }
+
+        // 4. Magnetometer (Magnetic Field in µT)
+        try {
+            magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+            if (magnetometer != null) {
+                isMagActive = sensorManager.registerListener(this, magnetometer, delayUs);
+                logger.i(TAG, "Magnetometer registered for tri-axial magnetic field in µT (" + delayUs + "µs)");
+            } else {
+                logger.w(TAG, "No Magnetometer sensor found on device.");
+            }
+        } catch (Throwable t) {
+            logger.w(TAG, "Error registering magnetometer: " + t.getMessage());
         }
     }
 
@@ -154,9 +162,14 @@ public class InertialCollector implements SensorEventListener {
                 isOrientActive = true;
             } catch (Throwable ignored) {}
         } else if (type == Sensor.TYPE_MAGNETIC_FIELD) {
-            lastGeomagnetic[0] = event.values[0];
-            lastGeomagnetic[1] = event.values[1];
-            lastGeomagnetic[2] = event.values[2];
+            magX = magX + ALPHA * (event.values[0] - magX);
+            magY = magY + ALPHA * (event.values[1] - magY);
+            magZ = magZ + ALPHA * (event.values[2] - magZ);
+            isMagActive = true;
+
+            lastGeomagnetic[0] = magX;
+            lastGeomagnetic[1] = magY;
+            lastGeomagnetic[2] = magZ;
             hasGeomagnetic = true;
 
             if (hasGravity && hasGeomagnetic && rotationVector == null) {
@@ -168,8 +181,9 @@ public class InertialCollector implements SensorEventListener {
         lastSnapshot = new InertialTelemetry(
                 accelX, accelY, accelZ,
                 gyroX, gyroY, gyroZ,
+                magX, magY, magZ,
                 pitch, roll, yaw,
-                isAccelActive, isGyroActive, isOrientActive,
+                isAccelActive, isGyroActive, isMagActive, isOrientActive,
                 lastEventTimestamp
         );
     }

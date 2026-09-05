@@ -39,6 +39,9 @@ interface TelemetryDao {
     @Query("SELECT COUNT(*) FROM telemetry_buffer WHERE sourceType = :sourceType")
     suspend fun getCountBySourceTypeDirect(sourceType: String): Int
 
+    @Query("SELECT COUNT(*) FROM telemetry_buffer WHERE sourceType IN (:sourceTypes)")
+    suspend fun getCountBySourceTypesDirect(sourceTypes: List<String>): Int
+
     @Query("UPDATE telemetry_buffer SET isSynced = 1 WHERE id IN (:ids)")
     suspend fun markAsSynced(ids: List<Long>): Int
 

@@ -30,10 +30,15 @@ public class LocationCollector implements LocationListener {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private volatile LocationTelemetry lastLocation = LocationTelemetry.empty();
+    private volatile Location currentBestLocation = null;
     private volatile boolean isRunning = false;
     private volatile int satellitesInView = 0;
     private volatile long lastUpdateTimestamp = 0;
     private volatile int intervalSeconds = 1;
+
+    // Freshness window multiplier: a GPS fix is considered active and fresh for up to
+    // max(8000ms, intervalSeconds * 2500ms) before allowing a lower-accuracy provider (network) to temporarily take over.
+    private static final long MIN_FRESHNESS_WINDOW_MS = 8000L;
 
     private Object gnssCallback; // GnssStatus.Callback or GpsStatus.Listener depending on API
 
@@ -177,12 +182,13 @@ public class LocationCollector implements LocationListener {
 
             Location best = null;
             if (gpsLoc != null) best = gpsLoc;
-            if (netLoc != null && (best == null || netLoc.getTime() > best.getTime())) best = netLoc;
-            if (fusedLoc != null && (best == null || fusedLoc.getTime() > best.getTime())) best = fusedLoc;
-            if (passiveLoc != null && (best == null || passiveLoc.getTime() > best.getTime())) best = passiveLoc;
+            if (netLoc != null && isBetterLocation(netLoc, best)) best = netLoc;
+            if (fusedLoc != null && isBetterLocation(fusedLoc, best)) best = fusedLoc;
+            if (passiveLoc != null && isBetterLocation(passiveLoc, best)) best = passiveLoc;
 
             if (best != null) {
                 logger.i(TAG, "Initial cached location loaded from " + best.getProvider() + " (" + best.getLatitude() + ", " + best.getLongitude() + ")");
+                currentBestLocation = best;
                 updateFromLocation(best, false);
             } else {
                 logger.w(TAG, "No cached location found yet. Awaiting fresh GPS/Network position fix.");
@@ -194,9 +200,109 @@ public class LocationCollector implements LocationListener {
 
     @Override
     public void onLocationChanged(Location location) {
-        if (location != null) {
+        if (location == null) return;
+
+        // Arbitrate: evaluate whether this new fix is better than the current active best fix.
+        // Always prioritize the most accurate provider (GPS > Fused > Network > Passive).
+        if (isBetterLocation(location, currentBestLocation)) {
+            currentBestLocation = location;
             updateFromLocation(location, true);
+        } else {
+            // Fix was rejected because we already hold a fresher, more accurate GPS location fix
+            logger.d(TAG, "Discarded lower quality location from " + location.getProvider()
+                    + " (acc: " + location.getAccuracy() + "m vs current "
+                    + (currentBestLocation != null ? currentBestLocation.getProvider() + " acc: " + currentBestLocation.getAccuracy() + "m" : "none") + ")");
         }
+    }
+
+    /**
+     * Determines whether one Location reading is better than the current Location fix.
+     * Highest accuracy (GPS) is ALWAYS preferred. Lower-accuracy providers (Network/Cell/Wi-Fi)
+     * are strictly rejected if a recent, accurate GPS fix is available.
+     *
+     * @param location The new Location that you want to evaluate
+     * @param currentBest The current Location fix, to which you want to compare the new one
+     */
+    private boolean isBetterLocation(Location location, Location currentBest) {
+        if (currentBest == null) {
+            // A new location is always better than no location
+            return true;
+        }
+
+        // Check whether the new location fix is newer or older
+        long timeDelta = location.getTime() - currentBest.getTime();
+        long freshnessThreshold = Math.max(MIN_FRESHNESS_WINDOW_MS, intervalSeconds * 2500L);
+        boolean isSignificantlyNewer = timeDelta > freshnessThreshold;
+        boolean isSignificantlyOlder = timeDelta < -freshnessThreshold;
+        boolean isNewer = timeDelta > 0;
+
+        // If it's been more than the freshness threshold since the current fix,
+        // use the new location because the user has likely moved.
+        if (isSignificantlyNewer) {
+            // Even if significantly newer, if current was GPS (< 25m) and new is a very coarse Network (> 200m),
+            // require at least 2x the threshold (e.g. 16s+) before falling back to coarse cell towers.
+            if (isGpsProvider(currentBest.getProvider()) && currentBest.hasAccuracy() && currentBest.getAccuracy() <= 25.0f
+                    && (!isGpsProvider(location.getProvider())) && location.hasAccuracy() && location.getAccuracy() > 200.0f) {
+                if (timeDelta < (freshnessThreshold * 2L)) {
+                    return false;
+                }
+            }
+            return true;
+        } else if (isSignificantlyOlder) {
+            return false;
+        }
+
+        // Check whether the new location fix is more or less accurate
+        int accuracyDelta = (int) (location.getAccuracy() - currentBest.getAccuracy());
+        boolean isLessAccurate = accuracyDelta > 0;
+        boolean isMoreAccurate = accuracyDelta < 0;
+        boolean isSignificantlyLessAccurate = accuracyDelta > 50;
+
+        // Check if the old and new location are from the same provider
+        boolean isFromSameProvider = isSameProvider(location.getProvider(), currentBest.getProvider());
+
+        boolean isNewGps = isGpsProvider(location.getProvider());
+        boolean isCurrentGps = isGpsProvider(currentBest.getProvider());
+
+        // PRIORITY RULE 1: If current is NOT GPS (e.g. network) and new IS GPS,
+        // switch immediately back to GPS if the GPS accuracy is reasonable (<= 50m) or better.
+        if (isNewGps && !isCurrentGps) {
+            if (location.hasAccuracy() && location.getAccuracy() <= 50.0f) {
+                logger.i(TAG, "GPS fix acquired! Switching priority immediately back to GPS (accuracy: " + location.getAccuracy() + "m)");
+                return true;
+            }
+        }
+
+        // PRIORITY RULE 2: If current IS GPS and fresh, NEVER let Network degrade it unless GPS accuracy is terrible.
+        if (!isNewGps && isCurrentGps) {
+            // Current GPS fix is within the freshness window and has decent accuracy
+            if (currentBest.hasAccuracy() && currentBest.getAccuracy() <= 50.0f) {
+                return false; // Reject network update!
+            }
+        }
+
+        // Standard accuracy comparison
+        if (isMoreAccurate) {
+            return true;
+        } else if (isNewer && !isLessAccurate) {
+            return true;
+        } else if (isNewer && !isSignificantlyLessAccurate && isFromSameProvider) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isGpsProvider(String provider) {
+        if (provider == null) return false;
+        String p = provider.toLowerCase();
+        return p.contains("gps") || p.equals("fused");
+    }
+
+    private boolean isSameProvider(String provider1, String provider2) {
+        if (provider1 == null) {
+            return provider2 == null;
+        }
+        return provider1.equalsIgnoreCase(provider2);
     }
 
     private void updateFromLocation(Location loc, boolean isLiveFix) {
@@ -267,6 +373,7 @@ public class LocationCollector implements LocationListener {
     public synchronized void stop() {
         if (!isRunning) return;
         isRunning = false;
+        currentBestLocation = null;
         logger.i(TAG, "Stopping location collector...");
 
         if (locationManager != null) {

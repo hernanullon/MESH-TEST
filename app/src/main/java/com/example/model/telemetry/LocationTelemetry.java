@@ -90,18 +90,21 @@ public class LocationTelemetry {
     public JSONObject toJson() {
         JSONObject obj = new JSONObject();
         try {
-            obj.put("lat", latitude);
-            obj.put("lon", longitude);
-            obj.put("alt", altitude);
-            obj.put("speed_kmh", (double) Math.round(speedKmh * 100) / 100);
-            obj.put("speed_ms", (double) Math.round(speedMs * 100) / 100);
-            obj.put("bearing", (double) Math.round(bearing * 10) / 10);
-            obj.put("accuracy", (double) Math.round(accuracy * 10) / 10);
-            obj.put("satellites", satellites);
-            obj.put("provider", provider);
-            obj.put("has_fix", hasFix);
-            obj.put("ts", timestamp);
+            populateFlatJson(obj);
         } catch (JSONException ignored) {}
         return obj;
+    }
+
+    public void populateFlatJson(JSONObject obj) throws JSONException {
+        obj.put("lat", latitude);
+        obj.put("lon", longitude);
+        obj.put("alt", (double) Math.round(altitude * 10) / 10);
+        obj.put("speed", (double) Math.round(speedMs * 100) / 100);
+        obj.put("bearing", (double) Math.round(bearing * 10) / 10);
+        obj.put("accuracy", (double) Math.round(accuracy * 10) / 10);
+        obj.put("satellites", satellites);
+        obj.put("provider", provider);
+        obj.put("has_fix", hasFix);
+        obj.put("timestamp", timestamp);
     }
 }

@@ -93,26 +93,24 @@ public class DeviceStatusTelemetry {
     public JSONObject toJson() {
         JSONObject obj = new JSONObject();
         try {
-            JSONObject battery = new JSONObject();
-            battery.put("level_pct", batteryLevelPercent);
-            battery.put("is_charging", isCharging);
-            battery.put("charge_source", chargeSource);
-            battery.put("temp_c", (double) Math.round(batteryTemperatureC * 10) / 10);
-            battery.put("voltage_mv", batteryVoltageMv);
-            battery.put("health", batteryHealth);
-            obj.put("battery", battery);
-
-            JSONObject sys = new JSONObject();
-            sys.put("free_ram_mb", freeRamMb);
-            sys.put("total_ram_mb", totalRamMb);
-            sys.put("ram_usage_pct", ramUsagePercent);
-            sys.put("free_storage_gb", (double) Math.round(freeStorageGb * 10) / 10);
-            sys.put("total_storage_gb", (double) Math.round(totalStorageGb * 10) / 10);
-            sys.put("thermal", thermalStatus);
-            obj.put("system", sys);
-
-            obj.put("ts", timestamp);
+            populateFlatJson(obj);
         } catch (JSONException ignored) {}
         return obj;
+    }
+
+    public void populateFlatJson(JSONObject obj) throws JSONException {
+        obj.put("soc", batteryLevelPercent);
+        obj.put("is_charging", isCharging);
+        obj.put("temp_c", (double) Math.round(batteryTemperatureC * 10) / 10);
+        obj.put("voltage_mv", batteryVoltageMv);
+        obj.put("health", batteryHealth);
+
+        obj.put("free_ram_mb", freeRamMb);
+        obj.put("total_ram_mb", totalRamMb);
+        obj.put("ram_usage_pct", ramUsagePercent);
+        obj.put("free_storage_gb", (double) Math.round(freeStorageGb * 10) / 10);
+        obj.put("total_storage_gb", (double) Math.round(totalStorageGb * 10) / 10);
+
+        obj.put("timestamp", timestamp);
     }
 }

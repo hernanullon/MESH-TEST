@@ -448,6 +448,20 @@ public class ScheduleManager {
         return lastEvaluationSummary;
     }
 
+    /**
+     * Checks if the scheduled Wi-Fi discharge window is currently active.
+     */
+    public synchronized boolean isDischargeWindowActive() {
+        if (config == null) return false;
+        Calendar now = Calendar.getInstance();
+        int dayOfWeek = now.get(Calendar.DAY_OF_WEEK);
+        if (!config.isDayActive(dayOfWeek)) return false;
+        int hour = now.get(Calendar.HOUR_OF_DAY);
+        int minute = now.get(Calendar.MINUTE);
+        boolean hotspotTargetState = config.isHotspotScheduleEnabled() && config.shouldHotspotBeActive(hour, minute);
+        return !hotspotTargetState && config.isWifiScheduleEnabled() && config.shouldWifiBeActive(hour, minute);
+    }
+
     public void registerListener(ScheduleChangeListener listener) {
         if (listener != null && !listeners.contains(listener)) {
             listeners.add(listener);

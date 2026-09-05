@@ -5,9 +5,12 @@ import android.os.Looper;
 import com.example.model.ConnectedClient;
 import com.example.model.HotspotInfo;
 import com.example.model.TcpPacket;
+import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -34,6 +37,20 @@ public class MeshStateManager {
     private long totalBytesTransferred = 0;
     private long serviceStartedTimestamp = 0;
     private com.example.model.telemetry.UnifiedTelemetrySnapshot latestTelemetrySnapshot = com.example.model.telemetry.UnifiedTelemetrySnapshot.empty("NODE-01");
+
+    // Holds the latest readings received from external sensors (e.g., climatic, can, obd, etc.)
+    // Key: type (e.g. "climatic"), Value: { json: JSONObject, receivedTimestamp: Long }
+    private final ConcurrentHashMap<String, ExternalSensorEntry> latestExternalSensors = new ConcurrentHashMap<>();
+
+    private static class ExternalSensorEntry {
+        final JSONObject json;
+        final long receivedTimestamp;
+
+        ExternalSensorEntry(JSONObject json, long receivedTimestamp) {
+            this.json = json;
+            this.receivedTimestamp = receivedTimestamp;
+        }
+    }
 
     private final List<StateChangeListener> listeners = new CopyOnWriteArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -69,6 +86,9 @@ public class MeshStateManager {
     }
 
     public void notifyPacketReceived(TcpPacket packet, String source) {
+        if (packet != null) {
+            recordExternalSensorPacket(packet);
+        }
         mainHandler.post(() -> {
             for (StateChangeListener l : listeners) {
                 l.onMessageReceived(packet, source);
@@ -76,32 +96,87 @@ public class MeshStateManager {
         });
     }
 
+    /**
+     * Stores incoming external telemetry packets in memory so they can be merged into
+     * the unified real-time stream.
+     */
+    private void recordExternalSensorPacket(TcpPacket packet) {
+        try {
+            String effectiveType = packet.getEffectiveType();
+            if (effectiveType == null || effectiveType.trim().isEmpty()) return;
+            effectiveType = effectiveType.trim().toLowerCase();
+
+            // Ignore internal transport control packets
+            if ("ping".equals(effectiveType) || "pong".equals(effectiveType)
+                    || "ack".equals(effectiveType) || "discover".equals(effectiveType)
+                    || "realtime".equals(effectiveType) || "batch".equals(effectiveType)) {
+                return;
+            }
+
+            // Extract the data fields as JSONObject
+            JSONObject dataObj = null;
+            String rawPayload = packet.getPayload();
+            if (rawPayload != null && !rawPayload.trim().isEmpty()) {
+                try {
+                    dataObj = new JSONObject(rawPayload.trim());
+                } catch (Exception ignored) {}
+            }
+
+            if (dataObj == null) {
+                try {
+                    dataObj = new JSONObject(packet.toJson());
+                } catch (Exception ignored) {}
+            }
+
+            if (dataObj != null) {
+                latestExternalSensors.put(effectiveType, new ExternalSensorEntry(dataObj, System.currentTimeMillis()));
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Returns the currently active external sensors (received within maxAgeMs, default 30s).
+     */
+    public Map<String, JSONObject> getActiveExternalSensors(long maxAgeMs) {
+        long now = System.currentTimeMillis();
+        ConcurrentHashMap<String, JSONObject> active = new ConcurrentHashMap<>();
+        for (Map.Entry<String, ExternalSensorEntry> entry : latestExternalSensors.entrySet()) {
+            if (now - entry.getValue().receivedTimestamp <= maxAgeMs) {
+                active.put(entry.getKey(), entry.getValue().json);
+            }
+        }
+        return active;
+    }
+
     // Getters and Setters
     public boolean isServiceRunning() {
         return isServiceRunning;
     }
 
-    public void setServiceRunning(boolean serviceRunning) {
-        isServiceRunning = serviceRunning;
-        if (serviceRunning && serviceStartedTimestamp == 0) {
+    public void setServiceRunning(boolean running) {
+        this.isServiceRunning = running;
+        if (running && serviceStartedTimestamp == 0) {
             serviceStartedTimestamp = System.currentTimeMillis();
-        } else if (!serviceRunning) {
+        } else if (!running) {
             serviceStartedTimestamp = 0;
         }
         notifyStateChanged();
-    }
-
-    public long getServiceStartedTimestamp() {
-        return serviceStartedTimestamp;
     }
 
     public boolean isWifiHardwareEnabled() {
         return isWifiHardwareEnabled;
     }
 
-    public void setWifiHardwareEnabled(boolean wifiHardwareEnabled, String details) {
-        isWifiHardwareEnabled = wifiHardwareEnabled;
-        wifiStatusDetails = details;
+    public void setWifiHardwareEnabled(boolean enabled) {
+        this.isWifiHardwareEnabled = enabled;
+        notifyStateChanged();
+    }
+
+    public void setWifiHardwareEnabled(boolean enabled, String details) {
+        this.isWifiHardwareEnabled = enabled;
+        if (details != null) {
+            this.wifiStatusDetails = details;
+        }
         notifyStateChanged();
     }
 
@@ -109,13 +184,22 @@ public class MeshStateManager {
         return wifiStatusDetails;
     }
 
+    public void setWifiStatusDetails(String details) {
+        this.wifiStatusDetails = details != null ? details : "Standby";
+        notifyStateChanged();
+    }
+
     public HotspotInfo getHotspotInfo() {
         return hotspotInfo;
     }
 
-    public void setHotspotInfo(HotspotInfo hotspotInfo) {
-        this.hotspotInfo = hotspotInfo;
+    public void setHotspotInfo(HotspotInfo info) {
+        this.hotspotInfo = info != null ? info : HotspotInfo.disabled();
         notifyStateChanged();
+    }
+
+    public boolean isHotspotActive() {
+        return hotspotInfo != null && hotspotInfo.isEnabled();
     }
 
     public boolean isTcpServerRunning() {
@@ -123,7 +207,7 @@ public class MeshStateManager {
     }
 
     public void setTcpServerRunning(boolean tcpServerRunning, int port) {
-        isTcpServerRunning = tcpServerRunning;
+        this.isTcpServerRunning = tcpServerRunning;
         tcpServerPort = port;
         notifyStateChanged();
     }
@@ -137,7 +221,7 @@ public class MeshStateManager {
     }
 
     public void setTcpClientConnected(boolean connected, String target, long latency) {
-        isTcpClientConnected = connected;
+        this.isTcpClientConnected = connected;
         tcpClientTarget = target;
         tcpClientLatency = latency;
         notifyStateChanged();

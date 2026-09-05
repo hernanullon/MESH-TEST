@@ -334,7 +334,7 @@ fun TelemetryBufferInspectionDialog(
                                             color = when (record.sourceType) {
                                                 "LOCATION" -> TechTealSecondary
                                                 "INERTIAL" -> CyberCyanPrimary
-                                                "DEVICE_STATUS" -> StatusActive
+                                                "DEVICE", "DEVICE_STATUS" -> StatusActive
                                                 else -> TextPrimary
                                             }
                                         )

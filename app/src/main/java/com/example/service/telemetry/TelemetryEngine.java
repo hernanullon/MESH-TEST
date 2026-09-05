@@ -195,8 +195,10 @@ public class TelemetryEngine {
             long seq = sequenceGenerator.incrementAndGet();
             long now = System.currentTimeMillis();
 
+            java.util.Map<String, org.json.JSONObject> activeExtSensors = stateManager.getActiveExternalSensors(30000);
+
             UnifiedTelemetrySnapshot snapshot = new UnifiedTelemetrySnapshot(
-                    deviceId, now, seq, loc, imu, dev
+                    deviceId, now, seq, loc, imu, dev, activeExtSensors
             );
             this.latestSnapshot = snapshot;
             stateManager.setLatestTelemetrySnapshot(snapshot);
@@ -225,8 +227,10 @@ public class TelemetryEngine {
         long seq = sequenceGenerator.incrementAndGet();
         long now = System.currentTimeMillis();
 
+        java.util.Map<String, org.json.JSONObject> activeExtSensors = stateManager.getActiveExternalSensors(30000);
+
         UnifiedTelemetrySnapshot snapshot = new UnifiedTelemetrySnapshot(
-                deviceId, now, seq, loc, imu, dev
+                deviceId, now, seq, loc, imu, dev, activeExtSensors
         );
         this.latestSnapshot = snapshot;
         stateManager.setLatestTelemetrySnapshot(snapshot);
