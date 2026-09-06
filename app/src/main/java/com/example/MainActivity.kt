@@ -1304,6 +1304,103 @@ fun ScheduleSetupScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            color = TechTealSecondary.copy(alpha = 0.2f)
+                        )
+
+                        Text(
+                            text = "Manual TCP Relay Test (Port 8888 -> $ipDriverText)",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = CyberCyanPrimary
+                        )
+
+                        val relayCtrl = remember { com.example.service.hardware.HardwareRelayController.getInstance(context) }
+                        var relayStatusMsg by remember { mutableStateOf("") }
+
+                        // Charge Buttons (task: charge, action: 1 / 0)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Charge:",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary,
+                                modifier = Modifier.width(65.dp)
+                            )
+                            Button(
+                                onClick = {
+                                    relayCtrl.setChargeState(1, "Manual UI Test ON")
+                                    relayStatusMsg = "Sent: charge=1 (ON)"
+                                },
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = StatusActive),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("ON (1)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = {
+                                    relayCtrl.setChargeState(0, "Manual UI Test OFF")
+                                    relayStatusMsg = "Sent: charge=0 (OFF)"
+                                },
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = StatusError),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("OFF (0)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Fans Buttons (task: fans, action: 1 / 0)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Fans:",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary,
+                                modifier = Modifier.width(65.dp)
+                            )
+                            Button(
+                                onClick = {
+                                    relayCtrl.setFansState(1, "Manual UI Test ON")
+                                    relayStatusMsg = "Sent: fans=1 (ON)"
+                                },
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = CyberCyanPrimary),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("ON (1)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = {
+                                    relayCtrl.setFansState(0, "Manual UI Test OFF")
+                                    relayStatusMsg = "Sent: fans=0 (OFF)"
+                                },
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("OFF (0)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        if (relayStatusMsg.isNotEmpty()) {
+                            Text(
+                                text = relayStatusMsg,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
                     }
                 }
             }
@@ -2062,6 +2159,40 @@ fun TcpManagementScreen(
                                         text = "Disk: ${String.format(Locale.US, "%.1f", dev.freeStorageGb)}GB free",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = TextMuted
+                                    )
+                                }
+                            }
+
+                            // ESP32 Hardware Relay Telemetry & Control Status
+                            val relayCtrl = remember { com.example.service.hardware.HardwareRelayController.getInstance(context) }
+                            val chargeOn = relayCtrl.isChargeRelayOn
+                            val fansOn = relayCtrl.isFansRelayOn
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 10.dp),
+                                color = TechTealSecondary.copy(alpha = 0.15f)
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Power,
+                                        contentDescription = null,
+                                        tint = if (chargeOn) StatusActive else TextMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "ESP32 Relays: Charge: ${if (chargeOn) "ON (1)" else "OFF (0)"} | Fans: ${if (fansOn) "ON (1)" else "OFF (0)"}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (chargeOn || fansOn) CyberCyanPrimary else TextMuted
                                     )
                                 }
                             }

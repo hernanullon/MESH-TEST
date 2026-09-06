@@ -175,6 +175,8 @@ public class TelemetryEngine {
             if (dev != null) {
                 String devId = getEffectiveDeviceId();
                 TelemetryBufferRepository.getInstance(context).bufferDeviceStatus(devId, dev);
+                // Autonomous evaluation of battery levels and temperatures for ESP32 charging/fans relays
+                com.example.service.hardware.HardwareRelayController.getInstance(context).evaluateTelemetry(dev);
             }
         } catch (Throwable t) {
             logger.w(TAG, "Error buffering raw device status: " + t.getMessage());
