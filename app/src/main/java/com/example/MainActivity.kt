@@ -1616,11 +1616,11 @@ fun TcpManagementScreen(
     logs: List<NetworkLog>,
     telemetrySnapshot: com.example.model.telemetry.UnifiedTelemetrySnapshot
 ) {
-    var messageText by remember { mutableStateOf("") }
     val localIp = remember { NetworkUtils.getLocalIpAddress() }
 
     var capturedSnapshot by remember { mutableStateOf<com.example.model.telemetry.UnifiedTelemetrySnapshot?>(null) }
     var snapshotTimestamp by remember { mutableStateOf<String?>(null) }
+    var bufferRefreshTrigger by remember { mutableLongStateOf(0L) }
 
     val networkSsid = if (hotspotInfo.ssid.isNotEmpty()) hotspotInfo.ssid else scheduleConfig.customSsid
     val networkPass = if (hotspotInfo.passphrase.isNotEmpty()) hotspotInfo.passphrase else scheduleConfig.customPassphrase
@@ -1781,7 +1781,7 @@ fun TcpManagementScreen(
                             ),
                             border = BorderStroke(1.dp, CyberCyanPrimary),
                             shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             modifier = Modifier.testTag("btn_capture_telemetry_snapshot")
                         ) {
                             Icon(
@@ -1789,8 +1789,6 @@ fun TcpManagementScreen(
                                 contentDescription = "Capture Snapshot",
                                 modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Snapshot", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -2396,63 +2394,6 @@ fun TcpManagementScreen(
             }
         }
 
-        // Send TCP Broadcast Message
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, DarkBorder),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "Broadcast TCP Message",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-
-                    OutlinedTextField(
-                        value = messageText,
-                        onValueChange = { messageText = it },
-                        placeholder = { Text("Enter message to broadcast...") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("tcp_message_input")
-                    )
-
-                    Button(
-                        onClick = {
-                            if (messageText.isNotBlank()) {
-                                try {
-                                    val intent = Intent(context, PersistentWifiTcpService::class.java).apply {
-                                        action = PersistentWifiTcpService.ACTION_SEND_BROADCAST
-                                        putExtra(PersistentWifiTcpService.EXTRA_MESSAGE, messageText.trim())
-                                    }
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        context.startForegroundService(intent)
-                                    } else {
-                                        context.startService(intent)
-                                    }
-                                    Toast.makeText(context, "Message sent to mesh", Toast.LENGTH_SHORT).show()
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Service error: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                                messageText = ""
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CyberCyanPrimary,
-                            contentColor = CyberCyanOnPrimary
-                        ),
-                        modifier = Modifier.fillMaxWidth().testTag("tcp_send_button")
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Broadcast Message")
-                    }
-                }
-            }
-        }
-
         // Connected Nodes
         item {
             Card(
@@ -2502,69 +2443,25 @@ fun TcpManagementScreen(
 
         // Local Persistence Buffer (Room SQLite) Card
         item {
-            LocalPersistenceBufferCard(context = context)
+            LocalPersistenceBufferCard(
+                context = context,
+                onRefreshTriggered = {
+                    bufferRefreshTrigger = System.currentTimeMillis()
+                }
+            )
         }
 
         // Cloud & Messaging Layer (RabbitMQ AMQP) Card
         item {
-            AmqpCloudCard(context = context)
+            AmqpCloudCard(
+                context = context,
+                refreshTrigger = bufferRefreshTrigger
+            )
         }
 
         // System OS & Keep-Alive Settings Card
         item {
             KeepAliveSettingsCard(context = context)
-        }
-
-        // Traffic and Message Logs
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                border = BorderStroke(1.dp, DarkBorder),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Received Messages Log",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    val tcpLogs = logs.filter { it.tag.contains("TCP", ignoreCase = true) || it.tag.contains("Mesh", ignoreCase = true) }.takeLast(15)
-                    if (tcpLogs.isEmpty()) {
-                        Text(
-                            text = "No TCP packets received yet.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextMuted
-                        )
-                    } else {
-                        tcpLogs.reversed().forEach { log ->
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = DarkSurfaceVariant.copy(alpha = 0.6f),
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(log.formattedTime, fontSize = 10.sp, color = TextMuted)
-                                        Text(log.tag, fontSize = 10.sp, color = CyberCyanPrimary)
-                                    }
-                                    Text(
-                                        text = log.message,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = TextPrimary
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }

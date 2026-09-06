@@ -32,14 +32,22 @@ import java.util.Locale
 @Composable
 fun AmqpCloudCard(
     context: Context,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    refreshTrigger: Long = 0L
 ) {
     val cloudManager = remember { AmqpCloudManager.getInstance(context) }
     val bufferRepository = remember { TelemetryBufferRepository.getInstance(context) }
 
     val realtimeStats by cloudManager.realtimeStats.collectAsState()
-    val batchStats by cloudManager.batchStats.collectAsState()
-    val unsyncedInDb by bufferRepository.unsyncedBufferedCount.collectAsState()
+    
+    // Bulk Discharger snapshot states (on-demand, no continuous real-time collection)
+    var batchStats by remember { mutableStateOf(cloudManager.batchStats.value) }
+    var unsyncedInDb by remember { mutableStateOf(bufferRepository.unsyncedBufferedCount.value) }
+
+    LaunchedEffect(refreshTrigger) {
+        batchStats = cloudManager.batchStats.value
+        unsyncedInDb = bufferRepository.unsyncedBufferedCount.value
+    }
 
     val config = remember { ScheduleManager.getInstance().config }
     val brokerHost = config?.amqpHost ?: "143.106.8.17"

@@ -27,25 +27,42 @@ import kotlinx.coroutines.launch
 @Composable
 fun LocalPersistenceBufferCard(
     context: Context,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onRefreshTriggered: () -> Unit = {}
 ) {
     val repository = remember { TelemetryBufferRepository.getInstance(context) }
-    val totalCount by repository.totalBufferedCount.collectAsState()
-    val unsyncedCount by repository.unsyncedBufferedCount.collectAsState()
-    val locationCount by repository.locationCount.collectAsState()
-    val inertialCount by repository.inertialCount.collectAsState()
-    val deviceStatusCount by repository.deviceStatusCount.collectAsState()
-    val externalTcpCount by repository.externalTcpCount.collectAsState()
-    val isBufferingInhibited by repository.isBufferingInhibited.collectAsState()
+    
+    // On-demand snapshot states (no real-time continuous updates)
+    var totalCount by remember { mutableStateOf(0) }
+    var unsyncedCount by remember { mutableStateOf(0) }
+    var locationCount by remember { mutableStateOf(0) }
+    var inertialCount by remember { mutableStateOf(0) }
+    var deviceStatusCount by remember { mutableStateOf(0) }
+    var externalTcpCount by remember { mutableStateOf(0) }
+    var isBufferingInhibited by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
     var showInspectDialog by remember { mutableStateOf(false) }
     var inspectRecords by remember { mutableStateOf<List<TelemetryRecordEntity>>(emptyList()) }
     var isInspecting by remember { mutableStateOf(false) }
 
+    fun updateSnapshotCounters() {
+        coroutineScope.launch {
+            repository.refreshCountersDirect()
+            totalCount = repository.totalBufferedCount.value
+            unsyncedCount = repository.unsyncedBufferedCount.value
+            locationCount = repository.locationCount.value
+            inertialCount = repository.inertialCount.value
+            deviceStatusCount = repository.deviceStatusCount.value
+            externalTcpCount = repository.externalTcpCount.value
+            isBufferingInhibited = repository.isBufferingInhibited.value
+            onRefreshTriggered()
+        }
+    }
+
     // Refresh counters on initial view
     LaunchedEffect(Unit) {
-        repository.refreshCounters()
+        updateSnapshotCounters()
     }
 
     Card(
@@ -92,7 +109,7 @@ fun LocalPersistenceBufferCard(
                 // On-demand refresh button
                 IconButton(
                     onClick = {
-                        repository.refreshCounters()
+                        updateSnapshotCounters()
                         Toast.makeText(context, "Buffer counts refreshed", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.size(32.dp).testTag("btn_refresh_buffer_stats")
@@ -246,7 +263,7 @@ fun LocalPersistenceBufferCard(
                     coroutineScope.launch {
                         isInspecting = true
                         inspectRecords = repository.getRecentRecordsDirect(30)
-                        repository.refreshCounters()
+                        updateSnapshotCounters()
                         isInspecting = false
                         showInspectDialog = true
                     }

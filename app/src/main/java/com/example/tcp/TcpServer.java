@@ -5,6 +5,7 @@ import android.os.Looper;
 import com.example.model.ConnectedClient;
 import com.example.model.TcpPacket;
 import com.example.utils.AppLogger;
+import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -248,14 +249,22 @@ public class TcpServer {
                 reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
 
-                // Send immediate ACK / DISCOVER response to peer
-                TcpPacket welcomePacket = new TcpPacket(
-                        TcpPacket.Type.ACK,
-                        "Server@" + port,
-                        clientModel.getClientId(),
-                        "CONNECTED_TO_LOCAL_MESH_SERVER"
-                );
-                sendRaw(welcomePacket.toJson() + "\n", welcomePacket.toJson().length());
+                // Send immediate time_sync packet to external sensor upon connection
+                try {
+                    String configuredDeviceId = TcpPacket.getConfiguredDeviceId();
+                    long currentTs = System.currentTimeMillis();
+                    JSONObject timeSyncObj = new JSONObject();
+                    timeSyncObj.put("task", "time_sync");
+                    timeSyncObj.put("device_id", configuredDeviceId);
+                    timeSyncObj.put("ts", currentTs);
+                    String timeSyncMsg = timeSyncObj.toString() + "\n";
+                    byte[] timeSyncBytes = timeSyncMsg.getBytes(StandardCharsets.UTF_8);
+                    sendRaw(timeSyncMsg, timeSyncBytes.length);
+                    totalBytesSent += timeSyncBytes.length;
+                    logger.s(TAG, "Sent time_sync to connected sensor [" + clientModel.getClientId() + "]: " + timeSyncMsg.trim());
+                } catch (Exception e) {
+                    logger.e(TAG, "Error sending time_sync to " + clientModel.getClientId() + ": " + e.getMessage());
+                }
 
                 String line;
                 while (isConnected.get() && (line = reader.readLine()) != null) {

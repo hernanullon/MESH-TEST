@@ -88,13 +88,12 @@ public class TcpPacket {
             obj.put("id", id);
             obj.put("type", getEffectiveType());
             obj.put("device_id", senderId);
-            obj.put("sender", senderId);
             obj.put("recipient", recipientId);
             obj.put("payload", payload != null ? payload : "");
             obj.put("timestamp", timestamp);
             return obj.toString();
         } catch (JSONException e) {
-            return "{\"id\":\"" + id + "\",\"type\":\"" + getEffectiveType() + "\",\"device_id\":\"" + senderId + "\",\"sender\":\"" + senderId + "\",\"payload\":\"" + payload + "\"}";
+            return "{\"id\":\"" + id + "\",\"type\":\"" + getEffectiveType() + "\",\"device_id\":\"" + senderId + "\",\"payload\":\"" + payload + "\"}";
         }
     }
 
@@ -126,13 +125,13 @@ public class TcpPacket {
             // Must be a valid JSON Object
             JSONObject obj = new JSONObject(jsonStr);
 
-            // Validation: Must contain 'type' field
-            if (!obj.has("type") || obj.isNull("type")) {
-                return null;
-            }
+            // Validation: Extract 'type' or 'task' field; fallback to 'sensor_data' for external sensor payloads
             String typeStr = obj.optString("type", "").trim();
             if (typeStr.isEmpty()) {
-                return null;
+                typeStr = obj.optString("task", "").trim();
+            }
+            if (typeStr.isEmpty()) {
+                typeStr = "sensor_data";
             }
 
             String id = obj.optString("id", UUID.randomUUID().toString().substring(0, 8));
@@ -152,9 +151,11 @@ public class TcpPacket {
                 sender = configuredDeviceId;
             }
 
+            // Remove unneeded "sender" key if present in incoming JSON
+            obj.remove("sender");
+
             // Override device_id in the JSON object itself
             obj.put("device_id", configuredDeviceId);
-            obj.put("sender", sender);
             obj.put("type", typeStr.toLowerCase());
 
             String recipient = obj.optString("recipient", "all");

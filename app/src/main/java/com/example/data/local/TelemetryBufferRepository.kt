@@ -265,7 +265,7 @@ class TelemetryBufferRepository private constructor(private val context: Context
 
         val effectiveType = packet.effectiveType.trim().lowercase()
         // If type is empty or internal protocol control packet, skip
-        if (effectiveType.isEmpty() || effectiveType == "ping" || effectiveType == "pong" || effectiveType == "ack") {
+        if (effectiveType.isEmpty() || effectiveType == "ping" || effectiveType == "pong" || effectiveType == "ack" || effectiveType == "time_sync" || effectiveType == "ack_time_sync") {
             return
         }
 
@@ -286,6 +286,9 @@ class TelemetryBufferRepository private constructor(private val context: Context
             } else {
                 JSONObject(packet.toJson())
             }
+
+            // Strictly remove unneeded sender field from external sensors
+            baseObj.remove("sender")
 
             // Strictly inject/override device_id and ts
             baseObj.put("device_id", configuredDeviceId)
@@ -345,7 +348,7 @@ class TelemetryBufferRepository private constructor(private val context: Context
         }
     }
 
-    private suspend fun refreshCountersDirect() {
+    suspend fun refreshCountersDirect() {
         try {
             _isBufferingInhibited.value = isWifiDischargeWindowActive()
 
