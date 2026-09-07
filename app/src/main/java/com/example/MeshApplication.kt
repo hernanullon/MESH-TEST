@@ -24,5 +24,15 @@ class MeshApplication : Application() {
 
         Log.i("MeshApplication", "MeshApplication initialized successfully.")
         com.example.data.local.TelemetryBufferRepository.getInstance(this)
+
+        try {
+            val hotspotMgr = com.example.wifi.LocalHotspotManager(this)
+            if (hotspotMgr.isDeviceOwner) {
+                hotspotMgr.grantAllDeviceOwnerPermissions()
+                hotspotMgr.enforce2GhzSystemSettings()
+                hotspotMgr.configureSoftAp2Ghz()
+                AppLogger.getInstance().s("MeshApplication", "Device Owner detectado: Permisos y ajustes de radio 2.4 GHz inicializados.")
+            }
+        } catch (_: Throwable) {}
     }
 }

@@ -107,4 +107,26 @@ public class NetworkUtils {
         char pre = "KMGTPE".charAt(exp - 1);
         return String.format("%.1f %cB", bytes / Math.pow(1024, exp), pre);
     }
+
+    /**
+     * Opens the Smartphone's native Tethering / Hotspot settings page
+     * so the user can easily switch the AP Band to 2.4 GHz or enable "Maximize compatibility".
+     */
+    public static boolean openHotspotSystemSettings(Context context) {
+        if (context == null) return false;
+        android.content.Intent[] intents = new android.content.Intent[] {
+            new android.content.Intent("android.settings.WIFI_TETHER_SETTINGS"),
+            new android.content.Intent("android.settings.TETHER_SETTINGS"),
+            new android.content.Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS),
+            new android.content.Intent(android.provider.Settings.ACTION_SETTINGS)
+        };
+        for (android.content.Intent intent : intents) {
+            try {
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(intent);
+                return true;
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
 }

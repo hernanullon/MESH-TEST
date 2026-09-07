@@ -2114,86 +2114,88 @@ fun TcpManagementScreen(
                             border = BorderStroke(1.dp, DarkBorder),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Battery
+                            Column(modifier = Modifier.fillMaxWidth()) {
                                 Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        if (dev.isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
-                                        contentDescription = null,
-                                        tint = if (dev.batteryLevelPercent > 20) StatusActive else StatusError,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Column {
+                                    // Battery
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            if (dev.isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
+                                            contentDescription = null,
+                                            tint = if (dev.batteryLevelPercent > 20) StatusActive else StatusError,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "${dev.batteryLevelPercent}% (${dev.batteryTemperatureC}°C)",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TextPrimary
+                                            )
+                                            Text(
+                                                text = if (dev.isCharging) "Charging (${dev.chargeSource})" else "Discharging",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = TextMuted
+                                            )
+                                        }
+                                    }
+
+                                    // RAM & Storage
+                                    Column(horizontalAlignment = Alignment.End) {
                                         Text(
-                                            text = "${dev.batteryLevelPercent}% (${dev.batteryTemperatureC}°C)",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Bold,
+                                            text = "RAM: ${dev.ramUsagePercent}% (${dev.freeRamMb}MB free)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
                                             color = TextPrimary
                                         )
                                         Text(
-                                            text = if (dev.isCharging) "Charging (${dev.chargeSource})" else "Discharging",
+                                            text = "Disk: ${String.format(Locale.US, "%.1f", dev.freeStorageGb)}GB free",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = TextMuted
                                         )
                                     }
                                 }
 
-                                // RAM & Storage
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = "RAM: ${dev.ramUsagePercent}% (${dev.freeRamMb}MB free)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextPrimary
-                                    )
-                                    Text(
-                                        text = "Disk: ${String.format(Locale.US, "%.1f", dev.freeStorageGb)}GB free",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextMuted
-                                    )
-                                }
-                            }
-
-                            // ESP32 Hardware Relay Telemetry & Control Status
-                            val relayCtrl = remember { com.example.service.hardware.HardwareRelayController.getInstance(context) }
-                            val chargeOn = relayCtrl.isChargeRelayOn
-                            val fansOn = relayCtrl.isFansRelayOn
-                            HorizontalDivider(
-                                modifier = Modifier.padding(horizontal = 10.dp),
-                                color = TechTealSecondary.copy(alpha = 0.15f)
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                                // ESP32 Hardware Relay Telemetry & Control Status
+                                val relayCtrl = remember { com.example.service.hardware.HardwareRelayController.getInstance(context) }
+                                val chargeOn = relayCtrl.isChargeRelayOn
+                                val fansOn = relayCtrl.isFansRelayOn
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 10.dp),
+                                    color = TechTealSecondary.copy(alpha = 0.15f)
+                                )
                                 Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        Icons.Default.Power,
-                                        contentDescription = null,
-                                        tint = if (chargeOn) StatusActive else TextMuted,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "ESP32 Relays: Charge: ${if (chargeOn) "ON (1)" else "OFF (0)"} | Fans: ${if (fansOn) "ON (1)" else "OFF (0)"}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Medium,
-                                        color = if (chargeOn || fansOn) CyberCyanPrimary else TextMuted
-                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Power,
+                                            contentDescription = null,
+                                            tint = if (chargeOn) StatusActive else TextMuted,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "ESP32 Relays: Charge: ${if (chargeOn) "ON (1)" else "OFF (0)"} | Fans: ${if (fansOn) "ON (1)" else "OFF (0)"}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (chargeOn || fansOn) CyberCyanPrimary else TextMuted
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2443,6 +2445,101 @@ fun TcpManagementScreen(
                                 )
                             }
 
+                            // Wi-Fi Radio Band (2.4 GHz IoT Compatibility)
+                            val is5Ghz = hotspotInfo.is5Ghz
+                            val bandBadgeColor = if (is5Ghz) StatusError else StatusActive
+                            val bandBadgeText = if (is5Ghz) "${hotspotInfo.band} (⚠️ Incompatible ESP32)" else "${hotspotInfo.band} (IoT/ESP32 OK)"
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(Icons.Default.WifiTethering, contentDescription = null, tint = bandBadgeColor, modifier = Modifier.size(16.dp))
+                                    Text("Wi-Fi Band:", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = bandBadgeColor.copy(alpha = 0.15f),
+                                    border = BorderStroke(0.8.dp, bandBadgeColor.copy(alpha = 0.5f))
+                                ) {
+                                    Text(
+                                        text = bandBadgeText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = bandBadgeColor,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+
+                            // If 5 GHz is detected, show actionable guidance and direct button to open Phone Settings
+                            if (is5Ghz) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = StatusError.copy(alpha = 0.12f),
+                                    border = BorderStroke(1.dp, StatusError.copy(alpha = 0.5f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(Icons.Default.Warning, contentDescription = null, tint = StatusError, modifier = Modifier.size(18.dp))
+                                            Text(
+                                                text = "¡Red emitida en 5 GHz!",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = StatusError
+                                            )
+                                        }
+                                        Text(
+                                            text = "Los módulos ESP32/IoT sólo tienen radio de 2.4 GHz y no detectarán esta red.\n\n" +
+                                                    "Por seguridad del SO Android, las apps de terceros no pueden cambiar la banda de hardware sin permisos de operador/sistema. Debes cambiarla en los Ajustes del Smartphone:\n" +
+                                                    "• Samsung: Ajustes > Mobile Hotspot > Configurar > Banda 2.4 GHz (o activar 'Maximizar compatibilidad').\n" +
+                                                    "• Xiaomi/Redmi: Ajustes > Punto de acceso portátil > Configurar > Banda 2.4 GHz.\n" +
+                                                    "• Pixel/Motorola: Ajustes > Zona Wi-Fi > Activar 'Maximizar compatibilidad' (fuerza 2.4 GHz).",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontSize = 11.5.sp,
+                                            color = TextPrimary,
+                                            lineHeight = 15.sp
+                                        )
+                                        Button(
+                                            onClick = {
+                                                NetworkUtils.openHotspotSystemSettings(context)
+                                            },
+                                            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = StatusError),
+                                            contentPadding = PaddingValues(vertical = 6.dp)
+                                        ) {
+                                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Abrir Ajustes de Zona Wi-Fi en Smartphone", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Shortcut to system hotspot settings for convenience
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = { NetworkUtils.openHotspotSystemSettings(context) },
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) {
+                                    Icon(Icons.Default.Settings, contentDescription = null, tint = CyberCyanPrimary, modifier = Modifier.size(13.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Configurar Zona Wi-Fi en Teléfono", fontSize = 11.sp, color = CyberCyanPrimary)
+                                }
+                            }
+
                             // Server IP
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2466,7 +2563,7 @@ fun TcpManagementScreen(
                             // Copy Credentials Button
                             OutlinedButton(
                                 onClick = {
-                                    val clipData = "SSID: $networkSsid\nPassword: $networkPass\nIP: $displayIp\nTCP Port: $serverPort"
+                                    val clipData = "SSID: $networkSsid\nPassword: $networkPass\nBand: ${hotspotInfo.band}\nIP: $displayIp\nTCP Port: $serverPort"
                                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                                     clipboard?.setPrimaryClip(ClipData.newPlainText("TCP Mesh Credentials", clipData))
                                     Toast.makeText(context, "Credentials copied to clipboard", Toast.LENGTH_SHORT).show()

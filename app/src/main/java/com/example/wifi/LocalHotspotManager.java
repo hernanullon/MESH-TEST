@@ -1,20 +1,26 @@
 package com.example.wifi;
 
+import android.Manifest;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
+import android.net.ConnectivityManager;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import androidx.annotation.RequiresApi;
 import com.example.model.HotspotInfo;
 import com.example.receiver.AdminReceiver;
 import com.example.utils.AppLogger;
 import com.example.utils.NetworkUtils;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.concurrent.Executor;
 
 /**
@@ -41,6 +47,24 @@ public class LocalHotspotManager {
     // Configured desired fixed credentials
     private String preferredSsid = "Direct-Mesh-Master";
     private String preferredPassphrase = "MeshPassword123";
+
+    private final Runnable startingTimeoutRunnable = () -> {
+        if (isStarting) {
+            logger.w(TAG, "Watchdog timeout esperando activación de Hotspot (8s). Recuperando...");
+            isStarting = false;
+            if (hotspotReservation == null && !isHotspotActive()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        startLocalOnlyHotspotApi26();
+                        return;
+                    } catch (Throwable t) {
+                        logger.e(TAG, "Fallback startLocalOnlyHotspotApi26 error: " + t.getMessage());
+                    }
+                }
+                updateState(HotspotInfo.failed("Tiempo de espera agotado iniciando Hotspot"));
+            }
+        }
+    };
 
     public interface HotspotStateListener {
         void onHotspotStateChanged(HotspotInfo info);
@@ -96,7 +120,7 @@ public class LocalHotspotManager {
 
     public boolean isHotspotActive() {
         if (currentHotspotInfo != null && currentHotspotInfo.isRunning()) {
-            if (hotspotReservation != null || isLegacyApActive()) {
+            if (hotspotReservation != null || isLegacyApActive() || NetworkUtils.isLocalApInterfaceUp()) {
                 return true;
             }
         }
@@ -113,10 +137,120 @@ public class LocalHotspotManager {
         }
     }
 
+    /**
+     * When running in Device Owner mode, automatically grants all required runtime
+     * permissions without user prompts.
+     */
+    public void grantAllDeviceOwnerPermissions() {
+        if (dpm == null) return;
+        try {
+            if (!dpm.isDeviceOwnerApp(context.getPackageName())) return;
+            ComponentName adminComponent = new ComponentName(context, AdminReceiver.class);
+            String pkg = context.getPackageName();
+            String[] permissions = new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    "android.permission.NEARBY_WIFI_DEVICES",
+                    "android.permission.POST_NOTIFICATIONS"
+            };
+            for (String perm : permissions) {
+                try {
+                    dpm.setPermissionGrantState(adminComponent, pkg, perm, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
+                } catch (Throwable ignored) {}
+            }
+            logger.s(TAG, "Permisos de tiempo de ejecución Device Owner auto-concedidos.");
+        } catch (Throwable t) {
+            logger.d(TAG, "grantAllDeviceOwnerPermissions: " + t.getMessage());
+        }
+    }
+
+    /**
+     * Programmatically forces system global / secure settings to 2.4 GHz band and Maximum Compatibility mode.
+     * Android and OEM ROMs (Samsung, Xiaomi, Pixel) respect these flags when initiating Tethering / SoftAP.
+     */
+    public void enforce2GhzSystemSettings() {
+        try {
+            Settings.Global.putInt(context.getContentResolver(), "wifi_ap_band", 0); // 0 = 2.4 GHz
+        } catch (Throwable ignored) {}
+        try {
+            Settings.Global.putInt(context.getContentResolver(), "wifi_ap_max_compatibility", 1); // 1 = Force 2.4 GHz
+        } catch (Throwable ignored) {}
+        try {
+            Settings.Secure.putInt(context.getContentResolver(), "wifi_ap_band", 0);
+        } catch (Throwable ignored) {}
+        try {
+            Settings.System.putInt(context.getContentResolver(), "wifi_ap_band", 0);
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Pre-configures the SoftAP system configuration for 2.4 GHz band and custom SSID/Passphrase
+     * if supported by the OS (Android 11+ via setSoftApConfiguration, and legacy setWifiApConfiguration).
+     */
+    public void configureSoftAp2Ghz() {
+        // Android 11+ SoftApConfiguration
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                SoftApConfiguration.Builder builder = new SoftApConfiguration.Builder();
+                try {
+                    Constructor<?> copyCtor = SoftApConfiguration.Builder.class.getConstructor(SoftApConfiguration.class);
+                    Method getMethod = wifiManager.getClass().getMethod("getSoftApConfiguration");
+                    Object current = getMethod.invoke(wifiManager);
+                    if (current instanceof SoftApConfiguration) {
+                        builder = (SoftApConfiguration.Builder) copyCtor.newInstance((SoftApConfiguration) current);
+                    }
+                } catch (Throwable ignored) {}
+
+                int band2Ghz = 1;
+                try {
+                    Field bandField = SoftApConfiguration.class.getField("BAND_2GHZ");
+                    band2Ghz = bandField.getInt(null);
+                } catch (Throwable ignored) {}
+
+                Method setBandMethod = builder.getClass().getMethod("setBand", int.class);
+                setBandMethod.invoke(builder, band2Ghz);
+
+                try {
+                    Method setSsid = builder.getClass().getMethod("setSsid", String.class);
+                    setSsid.invoke(builder, preferredSsid);
+                } catch (Throwable ignored) {}
+
+                if (preferredPassphrase != null && preferredPassphrase.length() >= 8) {
+                    builder.setPassphrase(preferredPassphrase, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+                }
+
+                SoftApConfiguration config = builder.build();
+                Method setMethod = wifiManager.getClass().getMethod("setSoftApConfiguration", SoftApConfiguration.class);
+                boolean ok = (boolean) setMethod.invoke(wifiManager, config);
+                logger.s(TAG, "wifiManager.setSoftApConfiguration(BAND_2GHZ) aplicado: " + ok);
+            } catch (Throwable t) {
+                logger.d(TAG, "configureSoftAp2Ghz (R+): " + t.getMessage());
+            }
+        }
+
+        // Legacy WifiConfiguration apBand = 0
+        try {
+            Method setConfig = wifiManager.getClass().getMethod("setWifiApConfiguration", WifiConfiguration.class);
+            WifiConfiguration config = new WifiConfiguration();
+            config.SSID = preferredSsid;
+            config.preSharedKey = preferredPassphrase;
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+            try {
+                Field apBandField = config.getClass().getField("apBand");
+                apBandField.setInt(config, 0); // 0 = 2.4 GHz
+            } catch (Throwable ignored) {}
+            boolean ok = (boolean) setConfig.invoke(wifiManager, config);
+            logger.s(TAG, "wifiManager.setWifiApConfiguration(apBand=0) aplicado: " + ok);
+        } catch (Throwable ignored) {}
+    }
+
     public boolean isStarting() {
         if (isStarting) {
-            if (System.currentTimeMillis() - startingTimestamp > 12000) {
+            if (System.currentTimeMillis() - startingTimestamp > 8000) {
                 isStarting = false;
+                if (currentHotspotInfo != null && currentHotspotInfo.getState() == HotspotInfo.State.STARTING) {
+                    updateState(HotspotInfo.failed("Tiempo de espera agotado iniciando Hotspot"));
+                }
                 return false;
             }
             return true;
@@ -176,6 +310,7 @@ public class LocalHotspotManager {
      */
     public synchronized void forceRestartHotspot() {
         logger.i(TAG, "Ejecutando reinicio completo forzado de la Red Local Wi-Fi...");
+        mainHandler.removeCallbacks(startingTimeoutRunnable);
         isStarting = false;
         if (hotspotReservation != null) {
             try {
@@ -231,6 +366,23 @@ public class LocalHotspotManager {
         logger.i(TAG, "Iniciando creación de Red Local Wi-Fi (SSID deseado: " + preferredSsid + ")...");
         updateState(HotspotInfo.starting());
 
+        // Cancel previous watchdog and set 8-second safety timeout
+        mainHandler.removeCallbacks(startingTimeoutRunnable);
+        mainHandler.postDelayed(startingTimeoutRunnable, 8000);
+
+        // Asegurar permisos de tiempo de ejecución
+        grantAllDeviceOwnerPermissions();
+
+        // Forzar configuraciones de sistema a 2.4 GHz
+        enforce2GhzSystemSettings();
+        configureSoftAp2Ghz();
+
+        // Desconectar cliente Wi-Fi para no bloquear el chip de radio en canal 5 GHz
+        try {
+            wifiManager.disconnect();
+        } catch (Throwable ignored) {}
+
+        // Iniciar Red Local Wi-Fi (LocalOnlyHotspot)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 startHotspotApi30WithCustomConfig();
@@ -240,6 +392,7 @@ public class LocalHotspotManager {
                 startLegacySoftAp();
             }
         } catch (Throwable t) {
+            mainHandler.removeCallbacks(startingTimeoutRunnable);
             isStarting = false;
             lastFailureTimestamp = System.currentTimeMillis();
             lastFailureReason = "Aviso inicio Red Local: " + t.getMessage();
@@ -249,30 +402,57 @@ public class LocalHotspotManager {
     }
 
     /**
-     * On Android 11+ (API 30+), attempts to request the Local Hotspot with custom SoftApConfiguration.
-     * If security restricts custom config without NEARBY_WIFI_DEVICES/Privileged permissions, falls back to standard.
+     * On Android 11+ (API 30+), requests Local Hotspot with custom SSID, WPA2-PSK Passphrase,
+     * and strictly forces the 2.4 GHz band (BAND_2GHZ) for IoT/ESP32 compatibility.
      */
     @RequiresApi(api = Build.VERSION_CODES.R)
     private void startHotspotApi30WithCustomConfig() {
-        boolean customAttempted = false;
+        int band2Ghz = 1; // 1 << 0 = BAND_2GHZ
+        try {
+            Field bandField = SoftApConfiguration.class.getField("BAND_2GHZ");
+            band2Ghz = bandField.getInt(null);
+        } catch (Throwable ignore) {}
+
+        // Full custom configuration (SSID + Passphrase WPA2 + 2.4 GHz Band)
         try {
             SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
-            try {
-                Method setSsidMethod = configBuilder.getClass().getMethod("setSsid", String.class);
-                setSsidMethod.invoke(configBuilder, preferredSsid);
-            } catch (Throwable ignore) {}
 
-            if (preferredPassphrase != null && preferredPassphrase.length() >= 8) {
-                configBuilder.setPassphrase(preferredPassphrase, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
-            } else {
-                configBuilder.setPassphrase(null, SoftApConfiguration.SECURITY_TYPE_OPEN);
+            // Set SSID
+            if (preferredSsid != null && !preferredSsid.isEmpty()) {
+                try {
+                    Method setSsidMethod = configBuilder.getClass().getMethod("setSsid", String.class);
+                    setSsidMethod.invoke(configBuilder, preferredSsid);
+                } catch (Throwable t) {
+                    logger.d(TAG, "setSsid error: " + t.getMessage());
+                }
             }
+
+            // Set WPA2-PSK Passphrase (min 8 chars required by Android Wi-Fi spec)
+            if (preferredPassphrase != null && preferredPassphrase.length() >= 8) {
+                try {
+                    configBuilder.setPassphrase(preferredPassphrase, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+                } catch (Throwable t) {
+                    try {
+                        Method setPassMethod = configBuilder.getClass().getMethod("setPassphrase", String.class, int.class);
+                        setPassMethod.invoke(configBuilder, preferredPassphrase, 1);
+                    } catch (Throwable ignored) {}
+                }
+            }
+
+            // Force 2.4 GHz Band
+            try {
+                Method setBandMethod = configBuilder.getClass().getMethod("setBand", int.class);
+                setBandMethod.invoke(configBuilder, band2Ghz);
+                logger.i(TAG, "Configurando banda SoftAP a 2.4 GHz (IoT / ESP32)...");
+            } catch (Throwable bandErr) {
+                logger.d(TAG, "setBand fallback: " + bandErr.getMessage());
+            }
+
             SoftApConfiguration softApConfig = configBuilder.build();
 
             Executor executor = mainHandler::post;
-            WifiManager.LocalOnlyHotspotCallback callback = createHotspotCallback();
+            WifiManager.LocalOnlyHotspotCallback callback = createHotspotCallback(true);
 
-            // Try reflection invocation of startLocalOnlyHotspot(SoftApConfiguration, Executor, Callback)
             Method method = WifiManager.class.getMethod(
                     "startLocalOnlyHotspot",
                     SoftApConfiguration.class,
@@ -280,19 +460,23 @@ public class LocalHotspotManager {
                     WifiManager.LocalOnlyHotspotCallback.class
             );
             method.invoke(wifiManager, softApConfig, executor, callback);
-            customAttempted = true;
-            logger.i(TAG, "Invocada creación de SoftAP con SSID y Clave fijas configuradas...");
+            logger.i(TAG, "Invocada creación de SoftAP en 2.4 GHz con SSID: [" + preferredSsid + "] y WPA2-PSK...");
+            return;
         } catch (Throwable t) {
-            logger.d(TAG, "Fallback a startLocalOnlyHotspot estándar: " + t.getMessage());
-            startLocalOnlyHotspotApi26();
+            logger.d(TAG, "startLocalOnlyHotspot con SoftApConfiguration custom falló: " + t.getMessage() + ", intentando fallback...");
         }
+
+        // Fallback: Standard system LocalOnlyHotspot (inherits 2.4 GHz system settings)
+        startLocalOnlyHotspotApi26();
     }
 
     @RequiresApi(api = Build.VERSION_CODES.O)
     private void startLocalOnlyHotspotApi26() {
         try {
-            wifiManager.startLocalOnlyHotspot(createHotspotCallback(), mainHandler);
+            wifiManager.startLocalOnlyHotspot(createHotspotCallback(false), mainHandler);
+            logger.i(TAG, "Invocado startLocalOnlyHotspot estándar de Android...");
         } catch (Throwable t) {
+            mainHandler.removeCallbacks(startingTimeoutRunnable);
             isStarting = false;
             lastFailureTimestamp = System.currentTimeMillis();
             lastFailureReason = t.getMessage();
@@ -302,11 +486,12 @@ public class LocalHotspotManager {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.O)
-    private WifiManager.LocalOnlyHotspotCallback createHotspotCallback() {
+    private WifiManager.LocalOnlyHotspotCallback createHotspotCallback(boolean isCustomConfigAttempt) {
         return new WifiManager.LocalOnlyHotspotCallback() {
             @Override
             public void onStarted(WifiManager.LocalOnlyHotspotReservation reservation) {
                 super.onStarted(reservation);
+                mainHandler.removeCallbacks(startingTimeoutRunnable);
                 try {
                     isStarting = false;
                     hotspotStartTime = System.currentTimeMillis();
@@ -351,10 +536,54 @@ public class LocalHotspotManager {
                         localIp = "192.168.43.1";
                     }
 
-                    logger.s(TAG, "¡Red Wi-Fi Local CREADA exitosamente!");
-                    logger.s(TAG, "SSID: [" + ssid + "] | Clave: [" + (passphrase == null || passphrase.isEmpty() ? "Abierta" : passphrase) + "] | IP Nodo: " + localIp);
+                    String actualBand = "2.4 GHz";
+                    int channelNumber = 0;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        try {
+                            android.net.wifi.SoftApConfiguration config = reservation.getSoftApConfiguration();
+                            if (config != null) {
+                                try {
+                                    Method getChannelMethod = config.getClass().getMethod("getChannel");
+                                    Object chResult = getChannelMethod.invoke(config);
+                                    if (chResult instanceof Integer) {
+                                        channelNumber = (Integer) chResult;
+                                    }
+                                } catch (Throwable ignore) {}
 
-                    updateState(HotspotInfo.running(ssid, passphrase != null ? passphrase : "", localIp));
+                                Method getBandMethod = config.getClass().getMethod("getBand");
+                                Object bandResult = getBandMethod.invoke(config);
+                                if (bandResult instanceof Integer) {
+                                    int bandInt = (Integer) bandResult;
+                                    if (channelNumber > 0) {
+                                        if (channelNumber <= 14) {
+                                            actualBand = "2.4 GHz (Ch " + channelNumber + ")";
+                                        } else {
+                                            actualBand = "5 GHz (Ch " + channelNumber + ")";
+                                        }
+                                    } else if ((bandInt & 2) != 0 && (bandInt & 1) == 0) {
+                                        actualBand = "5 GHz";
+                                    } else if ((bandInt & 1) != 0 && (bandInt & 2) == 0) {
+                                        actualBand = "2.4 GHz";
+                                    } else if ((bandInt & 2) != 0) {
+                                        actualBand = "5 GHz (Dual/Auto)";
+                                    } else {
+                                        actualBand = "2.4 GHz";
+                                    }
+                                }
+                            }
+                        } catch (Throwable ignore) {}
+                    }
+
+                    logger.s(TAG, "¡Red Wi-Fi Local CREADA exitosamente!");
+                    logger.s(TAG, "SSID: [" + ssid + "] | Banda: [" + actualBand + "] | Clave: [" + (passphrase == null || passphrase.isEmpty() ? "Abierta" : passphrase) + "] | IP Nodo: " + localIp);
+
+                    if (actualBand.contains("5 GHz")) {
+                        logger.w(TAG, "⚠️ ATENCIÓN: El smartphone ha iniciado la red en banda 5 GHz (" + actualBand + ").");
+                        logger.w(TAG, "⚠️ Los módulos ESP32 / IoT poseen antenas de 2.4 GHz únicamente y NO podrán conectarse.");
+                        logger.w(TAG, "⚠️ Para corregirlo: Abra Ajustes del Smartphone -> Zona Wi-Fi / Hotspot -> Configurar -> Banda 2.4 GHz o 'Maximizar compatibilidad'.");
+                    }
+
+                    updateState(HotspotInfo.running(ssid, passphrase != null ? passphrase : "", localIp, actualBand));
                 } catch (Throwable t) {
                     logger.w(TAG, "Error procesando onStarted de Hotspot: " + t.getMessage());
                 }
@@ -363,6 +592,7 @@ public class LocalHotspotManager {
             @Override
             public void onStopped() {
                 super.onStopped();
+                mainHandler.removeCallbacks(startingTimeoutRunnable);
                 try {
                     isStarting = false;
                     hotspotStartTime = 0;
@@ -377,6 +607,18 @@ public class LocalHotspotManager {
             @Override
             public void onFailed(int reason) {
                 super.onFailed(reason);
+                mainHandler.removeCallbacks(startingTimeoutRunnable);
+
+                if (isCustomConfigAttempt) {
+                    logger.w(TAG, "Intento con SoftApConfiguration falló (código " + reason + "). Reintentando inmediatamente con API estándar...");
+                    try {
+                        startLocalOnlyHotspotApi26();
+                        return;
+                    } catch (Throwable t) {
+                        logger.w(TAG, "Fallback estándar tras onFailed falló: " + t.getMessage());
+                    }
+                }
+
                 try {
                     isStarting = false;
                     hotspotStartTime = 0;
@@ -420,6 +662,11 @@ public class LocalHotspotManager {
             config.SSID = preferredSsid;
             config.preSharedKey = preferredPassphrase;
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+            try {
+                // apBand: 0 = 2.4 GHz, 1 = 5 GHz
+                java.lang.reflect.Field apBandField = config.getClass().getField("apBand");
+                apBandField.setInt(config, 0); // 2.4 GHz
+            } catch (Throwable ignored) {}
 
             boolean success = (boolean) method.invoke(wifiManager, config, true);
             if (success) {
@@ -440,6 +687,8 @@ public class LocalHotspotManager {
      */
     public synchronized void stopLocalHotspot() {
         logger.i(TAG, "Stopping and removing Local Wi-Fi network...");
+        mainHandler.removeCallbacks(startingTimeoutRunnable);
+        isStarting = false;
         if (hotspotReservation != null) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -452,6 +701,27 @@ public class LocalHotspotManager {
                 hotspotReservation = null;
             }
         }
+
+        // Try stopping via TetheringManager (Android 11+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                Object tm = context.getSystemService("tethering");
+                if (tm != null) {
+                    Method stopMethod = tm.getClass().getMethod("stopTethering", int.class);
+                    stopMethod.invoke(tm, 0); // 0 = TETHERING_WIFI
+                    logger.d(TAG, "TetheringManager.stopTethering(0) invocado.");
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        // Try stopping via ConnectivityManager
+        try {
+            ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                Method stopMethod = cm.getClass().getMethod("stopTethering", int.class);
+                stopMethod.invoke(cm, 0);
+            }
+        } catch (Throwable ignored) {}
 
         // Try reflection stop for legacy AP if applicable
         try {

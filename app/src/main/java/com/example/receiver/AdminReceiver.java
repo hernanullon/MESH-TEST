@@ -17,6 +17,15 @@ public class AdminReceiver extends DeviceAdminReceiver {
     public void onEnabled(Context context, Intent intent) {
         super.onEnabled(context, intent);
         AppLogger.getInstance().s(TAG, "Privilegios de Administrador / Device Owner ACTIVADOS");
+        try {
+            com.example.wifi.LocalHotspotManager hotspotManager = new com.example.wifi.LocalHotspotManager(context);
+            hotspotManager.grantAllDeviceOwnerPermissions();
+            hotspotManager.enforce2GhzSystemSettings();
+            hotspotManager.configureSoftAp2Ghz();
+            AppLogger.getInstance().s(TAG, "Banda 2.4 GHz y permisos Device Owner aplicados automáticamente.");
+        } catch (Throwable t) {
+            AppLogger.getInstance().d(TAG, "Error inicializando configuración de Device Owner: " + t.getMessage());
+        }
         Toast.makeText(context, "Modo Administrador de Dispositivo Activado", Toast.LENGTH_SHORT).show();
     }
 
