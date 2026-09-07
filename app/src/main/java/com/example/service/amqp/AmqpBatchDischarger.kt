@@ -291,13 +291,16 @@ class AmqpBatchDischarger(
                     val total = totalDischargedCounter.addAndGet(unsyncedList.size.toLong())
                     confirmsReceivedCounter.addAndGet(unsyncedList.size.toLong())
 
+                    // Purge confirmed records from SQLite Room database so local storage is released and counters updated
+                    val purged = bufferRepository.purgeSyncedRecords()
+
                     _stats.value = _stats.value.copy(
                         totalRecordsDischarged = total,
                         confirmsReceived = confirmsReceivedCounter.get(),
                         lastDischargeTimestamp = System.currentTimeMillis()
                     )
 
-                    logger.s(TAG, "Batch of ${unsyncedList.size} records ACKed and marked as synced! (Total: $total)")
+                    logger.s(TAG, "Batch of ${unsyncedList.size} records ACKed by broker and purged from SQLite ($purged deleted). (Total: $total)")
                 } else {
                     confirmsFailedCounter.addAndGet(unsyncedList.size.toLong())
                     _stats.value = _stats.value.copy(
@@ -348,6 +351,23 @@ class AmqpBatchDischarger(
         refreshPendingCount()
         logger.i(TAG, "Purged $deleted synced records from Room buffer.")
         return deleted
+    }
+
+    /**
+     * Encerar los contadores de discharge y broker (discharged, ACKs, NACKs)
+     * al finalizar cada ventana de descarga de datos Wi-Fi.
+     */
+    fun resetWindowCounters() {
+        totalDischargedCounter.set(0)
+        confirmsReceivedCounter.set(0)
+        confirmsFailedCounter.set(0)
+        _stats.value = _stats.value.copy(
+            totalRecordsDischarged = 0,
+            confirmsReceived = 0,
+            confirmsFailed = 0
+        )
+        refreshPendingCount()
+        logger.i(TAG, "Bulk Discharger: Contadores de discharge y broker encerados a 0 al cumplirse la ventana Wi-Fi.")
     }
 
     fun stop() {

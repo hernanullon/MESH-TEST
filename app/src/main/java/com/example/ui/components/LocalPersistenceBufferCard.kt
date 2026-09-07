@@ -32,7 +32,7 @@ fun LocalPersistenceBufferCard(
 ) {
     val repository = remember { TelemetryBufferRepository.getInstance(context) }
     
-    // On-demand snapshot states (no real-time continuous updates)
+    // On-demand snapshot states (no real-time continuous updates to save memory/CPU)
     var totalCount by remember { mutableStateOf(0) }
     var unsyncedCount by remember { mutableStateOf(0) }
     var locationCount by remember { mutableStateOf(0) }

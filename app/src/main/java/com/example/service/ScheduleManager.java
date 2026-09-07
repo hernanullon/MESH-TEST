@@ -415,13 +415,11 @@ public class ScheduleManager {
                  }
              }
 
-             if (wifiTargetState) {
-                 try {
-                     if (appContext != null) {
-                         com.example.service.amqp.AmqpCloudManager.getInstance(appContext).onWifiWindowActive(true);
-                     }
-                 } catch (Throwable ignored) {}
-             }
+             try {
+                 if (appContext != null) {
+                     com.example.service.amqp.AmqpCloudManager.getInstance(appContext).onWifiWindowActive(wifiTargetState);
+                 }
+             } catch (Throwable ignored) {}
          }
 
          // When local TCP network / Hotspot is active, ensure Wi-Fi discharge window is inactive and Real-time SIM stream resumes

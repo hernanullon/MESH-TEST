@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -39,8 +40,8 @@ fun AmqpCloudCard(
     val bufferRepository = remember { TelemetryBufferRepository.getInstance(context) }
 
     val realtimeStats by cloudManager.realtimeStats.collectAsState()
-    
-    // Bulk Discharger snapshot states (on-demand, no continuous real-time collection)
+
+    // Bulk Discharger snapshot states (on-demand snapshot, no continuous real-time recompositions)
     var batchStats by remember { mutableStateOf(cloudManager.batchStats.value) }
     var unsyncedInDb by remember { mutableStateOf(bufferRepository.unsyncedBufferedCount.value) }
 
@@ -381,18 +382,40 @@ fun AmqpCloudCard(
                             BatchDischargeState.IDLE -> "STANDBY" to TextMuted
                         }
 
-                        Surface(
-                            color = batchBadgeColor.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(6.dp),
-                            border = BorderStroke(1.dp, batchBadgeColor.copy(alpha = 0.4f))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Text(
-                                text = batchBadgeText,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = batchBadgeColor,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
+                            IconButton(
+                                onClick = {
+                                    cloudManager.resetBatchDischargerCounters()
+                                    batchStats = cloudManager.batchStats.value
+                                    unsyncedInDb = bufferRepository.unsyncedBufferedCount.value
+                                    Toast.makeText(context, "Contadores de discharge encerados", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp).testTag("btn_reset_batch_counters")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.RestartAlt,
+                                    contentDescription = "Encerar contadores",
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+
+                            Surface(
+                                color = batchBadgeColor.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, batchBadgeColor.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = batchBadgeText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = batchBadgeColor,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
                         }
                     }
 

@@ -76,20 +76,32 @@ class AmqpCloudManager private constructor(context: Context) {
         batchDischarger.triggerBatchDischarge()
     }
 
+    private val isWifiWindowActiveState = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /**
      * Called when the autonomous schedule opens or closes the Wi-Fi active window.
      * When Wi-Fi is active (discharge window): pauses Real-time SIM stream and starts batch discharge.
-     * When Wi-Fi is inactive (field/local mesh window): resumes Real-time SIM stream.
+     * When Wi-Fi is inactive (field/local mesh window): resumes Real-time SIM stream and encera (resets to 0) bulk counters.
      */
     fun onWifiWindowActive(active: Boolean) {
+        val wasActive = isWifiWindowActiveState.getAndSet(active)
         if (active) {
-            logger.s(TAG, "Wi-Fi discharge window active! Pausing Real-Time SIM stream & auto-triggering bulk AMQP upload...")
-            realtimeTransmitter.pause()
-            batchDischarger.triggerBatchDischarge()
+            if (!wasActive) {
+                logger.s(TAG, "Wi-Fi discharge window active! Pausing Real-Time SIM stream & auto-triggering bulk AMQP upload...")
+                realtimeTransmitter.pause()
+                batchDischarger.triggerBatchDischarge()
+            }
         } else {
-            logger.s(TAG, "Wi-Fi discharge window ended. Resuming Real-Time SIM stream...")
-            realtimeTransmitter.resume()
+            if (wasActive) {
+                logger.s(TAG, "Wi-Fi discharge window ended. Encerando contadores de Bulk Discharger y reanudando Real-Time SIM stream...")
+                realtimeTransmitter.resume()
+                batchDischarger.resetWindowCounters()
+            }
         }
+    }
+
+    fun resetBatchDischargerCounters() {
+        batchDischarger.resetWindowCounters()
     }
 
     /**
