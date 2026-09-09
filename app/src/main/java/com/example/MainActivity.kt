@@ -26,6 +26,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -762,6 +764,7 @@ fun ScheduleSetupScreen(
     var amqpRoutingKeyText by remember { mutableStateOf(initialConfig.amqpRoutingKey) }
     var amqpQueueText by remember { mutableStateOf(initialConfig.amqpQueue) }
     var amqpSslEnabled by remember { mutableStateOf(initialConfig.isAmqpSslEnabled) }
+    var amqpBatchSizeText by remember { mutableStateOf(initialConfig.amqpBatchSize.toString()) }
 
     var currentTimeStr by remember { mutableStateOf("") }
 
@@ -1210,6 +1213,18 @@ fun ScheduleSetupScreen(
                                 modifier = Modifier.weight(1f).testTag("input_amqp_routing_key")
                             )
                         }
+
+                        OutlinedTextField(
+                            value = amqpBatchSizeText,
+                            onValueChange = { amqpBatchSizeText = it },
+                            label = { Text("Bulk Wi-Fi Batch Size") },
+                            placeholder = { Text("500") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                            modifier = Modifier.fillMaxWidth().testTag("input_amqp_batch_size"),
+                            supportingText = { Text("Registros por lote de confirmación en descarga Wi-Fi", fontSize = 10.sp, color = TextMuted) }
+                        )
                     }
                 }
             }
@@ -1633,7 +1648,8 @@ fun ScheduleSetupScreen(
                         amqpQueueText.trim(),
                         amqpSslEnabled,
                         locInterval,
-                        imuInterval
+                        imuInterval,
+                        amqpBatchSizeText.toIntOrNull() ?: 500
                     )
 
                     Toast.makeText(context, "Configuration saved successfully", Toast.LENGTH_SHORT).show()
@@ -2445,10 +2461,10 @@ fun TcpManagementScreen(
                                 )
                             }
 
-                            // Wi-Fi Radio Band (2.4 GHz IoT Compatibility)
+                            // Wi-Fi Radio Band
                             val is5Ghz = hotspotInfo.is5Ghz
                             val bandBadgeColor = if (is5Ghz) StatusError else StatusActive
-                            val bandBadgeText = if (is5Ghz) "${hotspotInfo.band} (⚠️ Incompatible ESP32)" else "${hotspotInfo.band} (IoT/ESP32 OK)"
+                            val bandBadgeText = if (hotspotInfo.band.isNotBlank()) hotspotInfo.band else "2.4 GHz"
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),

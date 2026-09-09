@@ -112,6 +112,13 @@ object AmqpErrorClassifier {
         val msg = root.message ?: root.javaClass.simpleName
         val msgLower = msg.lowercase()
 
+        // Cancellation / Window finished
+        if (root is java.util.concurrent.CancellationException ||
+            msgLower.contains("cancelled") ||
+            msgLower.contains("cancellation")) {
+            return "[System] Descarga finalizada o pausada (Ventana Wi-Fi cumplida)"
+        }
+
         // Wi-Fi connectivity issues
         if (root is SocketTimeoutException || msgLower.contains("timed out")) {
             return "[Wi-Fi Network] Connection timed out (No Internet access via Wi-Fi)"

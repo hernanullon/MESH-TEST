@@ -76,7 +76,8 @@ data class AmqpConnectionParams(
     val baseRoutingKey: String,
     val queue: String,
     val sslEnabled: Boolean,
-    val deviceId: String
+    val deviceId: String,
+    val batchSize: Int = 500
 ) {
     companion object {
         fun fromScheduleConfig(config: ScheduleConfig?): AmqpConnectionParams {
@@ -91,7 +92,8 @@ data class AmqpConnectionParams(
                     baseRoutingKey = "unicamp.campinas.",
                     queue = "",
                     sslEnabled = false,
-                    deviceId = "NODE-01"
+                    deviceId = "NODE-01",
+                    batchSize = 500
                 )
             }
             return AmqpConnectionParams(
@@ -104,7 +106,8 @@ data class AmqpConnectionParams(
                 baseRoutingKey = config.amqpRoutingKey,
                 queue = config.amqpQueue,
                 sslEnabled = config.isAmqpSslEnabled,
-                deviceId = config.deviceId ?: "NODE-01"
+                deviceId = config.deviceId ?: "NODE-01",
+                batchSize = config.amqpBatchSize
             )
         }
     }
@@ -122,15 +125,11 @@ data class AmqpConnectionParams(
 
     fun getBatchRoutingKey(subType: String = ""): String {
         val cleanKey = baseRoutingKey.trim()
-        val suffix = subType.trim().lowercase()
-        val leaf = if (suffix.isNotEmpty()) suffix else "batch"
-
-        return if (cleanKey.endsWith(".")) {
-            "$cleanKey$leaf"
-        } else if (cleanKey.isNotEmpty()) {
-            "$cleanKey.$leaf"
+        val prefix = if (cleanKey.endsWith(".")) cleanKey else if (cleanKey.isNotEmpty()) "$cleanKey." else "telemetry."
+        return if (subType.isNotBlank()) {
+            "$prefix$subType"
         } else {
-            "telemetry.$leaf"
+            "${prefix}batch"
         }
     }
 }

@@ -137,7 +137,7 @@ public class ScheduleManager {
             String ipDriver, int batteryMin, int batteryMax, int tempMin, int tempMax,
             String amqpHost, int amqpPort, String amqpVirtualHost, String amqpUser, String amqpPass,
             String amqpExchange, String amqpRoutingKey, String amqpQueue, boolean amqpSsl,
-            int locationIntervalSec, int inertialIntervalMs
+            int locationIntervalSec, int inertialIntervalMs, int amqpBatchSize
     ) {
         if (config != null) {
             config.setConfigured(true);
@@ -162,6 +162,7 @@ public class ScheduleManager {
             config.setAmqpRoutingKey(amqpRoutingKey);
             config.setAmqpQueue(amqpQueue);
             config.setAmqpSslEnabled(amqpSsl);
+            config.setAmqpBatchSize(amqpBatchSize);
 
             config.setLocationIntervalSeconds(locationIntervalSec);
             config.setInertialIntervalMs(inertialIntervalMs);

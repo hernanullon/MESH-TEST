@@ -93,9 +93,9 @@ class AmqpCloudManager private constructor(context: Context) {
             }
         } else {
             if (wasActive) {
-                logger.s(TAG, "Wi-Fi discharge window ended. Encerando contadores de Bulk Discharger y reanudando Real-Time SIM stream...")
+                logger.s(TAG, "Wi-Fi discharge window ended. Purgando registros sincronizados (is_synced=1), encerando contadores y reanudando Real-Time SIM stream...")
                 realtimeTransmitter.resume()
-                batchDischarger.resetWindowCounters()
+                batchDischarger.onWifiWindowEnded()
             }
         }
     }

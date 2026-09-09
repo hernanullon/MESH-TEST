@@ -57,6 +57,7 @@ public class ScheduleConfig {
     private String amqpRoutingKey = "unicamp.campinas.";
     private String amqpQueue = "";
     private boolean amqpSslEnabled = false;
+    private int amqpBatchSize = 500;
 
     // Fixed Network Credentials for Mesh Nodes
     private String customSsid = "Direct-Mesh-Master";
@@ -249,6 +250,15 @@ public class ScheduleConfig {
 
     public boolean isAmqpSslEnabled() { return amqpSslEnabled; }
     public void setAmqpSslEnabled(boolean amqpSslEnabled) { this.amqpSslEnabled = amqpSslEnabled; }
+
+    public int getAmqpBatchSize() {
+        return (amqpBatchSize <= 0) ? 500 : amqpBatchSize;
+    }
+    public void setAmqpBatchSize(int amqpBatchSize) {
+        if (amqpBatchSize > 0) {
+            this.amqpBatchSize = amqpBatchSize;
+        }
+    }
 
     public int getOffStartHour() { return offStartHour; }
     public int getOffStartMinute() { return offStartMinute; }
@@ -530,6 +540,7 @@ public class ScheduleConfig {
             root.put("amqpRoutingKey", amqpRoutingKey);
             root.put("amqpQueue", amqpQueue);
             root.put("amqpSslEnabled", amqpSslEnabled);
+            root.put("amqpBatchSize", amqpBatchSize);
             root.put("wifiScheduleEnabled", wifiScheduleEnabled);
             root.put("hotspotScheduleEnabled", hotspotScheduleEnabled);
             root.put("offStartHour", offStartHour);
@@ -591,6 +602,7 @@ public class ScheduleConfig {
             config.setAmqpRoutingKey(root.optString("amqpRoutingKey", "unicamp.campinas."));
             config.setAmqpQueue(root.optString("amqpQueue", ""));
             config.setAmqpSslEnabled(root.optBoolean("amqpSslEnabled", false));
+            config.setAmqpBatchSize(root.optInt("amqpBatchSize", 500));
 
             config.setWifiScheduleEnabled(root.optBoolean("wifiScheduleEnabled", true));
             config.setHotspotScheduleEnabled(root.optBoolean("hotspotScheduleEnabled", true));

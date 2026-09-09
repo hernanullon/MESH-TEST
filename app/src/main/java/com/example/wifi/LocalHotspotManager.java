@@ -288,6 +288,15 @@ public class LocalHotspotManager {
                 return;
             }
 
+            // If running in 5 GHz, restart to force back to 2.4 GHz
+            if (currentHotspotInfo != null && currentHotspotInfo.is5Ghz() && activeDuration > 5000) {
+                logger.w(TAG, "[Watchdog] Hotspot detectado en banda 5 GHz. Forzando reinicio para recuperar 2.4 GHz...");
+                enforce2GhzSystemSettings();
+                configureSoftAp2Ghz();
+                forceRestartHotspot();
+                return;
+            }
+
             // Proactive SoftAP Refresh: Android OS tears down LocalOnlyHotspot after 10-20 min of no clients.
             // If running for > 8 minutes with 0 connected peers, refresh cleanly to reset OS idle timer.
             if (connectedClientsCount == 0 && activeDuration > 8 * 60 * 1000) {
@@ -556,16 +565,16 @@ public class LocalHotspotManager {
                                     int bandInt = (Integer) bandResult;
                                     if (channelNumber > 0) {
                                         if (channelNumber <= 14) {
-                                            actualBand = "2.4 GHz (Ch " + channelNumber + ")";
+                                            actualBand = "2.4 GHz";
                                         } else {
-                                            actualBand = "5 GHz (Ch " + channelNumber + ")";
+                                            actualBand = "5 GHz";
                                         }
                                     } else if ((bandInt & 2) != 0 && (bandInt & 1) == 0) {
                                         actualBand = "5 GHz";
                                     } else if ((bandInt & 1) != 0 && (bandInt & 2) == 0) {
                                         actualBand = "2.4 GHz";
                                     } else if ((bandInt & 2) != 0) {
-                                        actualBand = "5 GHz (Dual/Auto)";
+                                        actualBand = "5 GHz";
                                     } else {
                                         actualBand = "2.4 GHz";
                                     }
@@ -580,7 +589,16 @@ public class LocalHotspotManager {
                     if (actualBand.contains("5 GHz")) {
                         logger.w(TAG, "⚠️ ATENCIÓN: El smartphone ha iniciado la red en banda 5 GHz (" + actualBand + ").");
                         logger.w(TAG, "⚠️ Los módulos ESP32 / IoT poseen antenas de 2.4 GHz únicamente y NO podrán conectarse.");
-                        logger.w(TAG, "⚠️ Para corregirlo: Abra Ajustes del Smartphone -> Zona Wi-Fi / Hotspot -> Configurar -> Banda 2.4 GHz o 'Maximizar compatibilidad'.");
+                        logger.w(TAG, "⚠️ Reaplicando configuraciones de radio 2.4 GHz y programando reinicio correctivo...");
+                        enforce2GhzSystemSettings();
+                        configureSoftAp2Ghz();
+                        // Si el hardware abrió en 5 GHz, intentar auto-reinicio a 2.4 GHz en 4 segundos
+                        mainHandler.postDelayed(() -> {
+                            if (isHotspotActive() && currentHotspotInfo != null && currentHotspotInfo.is5Ghz()) {
+                                logger.w(TAG, "Ejecutando reinicio correctivo de Hotspot para recuperar banda 2.4 GHz...");
+                                forceRestartHotspot();
+                            }
+                        }, 4000);
                     }
 
                     updateState(HotspotInfo.running(ssid, passphrase != null ? passphrase : "", localIp, actualBand));

@@ -12,6 +12,9 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
 import com.example.receiver.AdminReceiver;
 import com.example.utils.AppLogger;
@@ -33,6 +36,14 @@ public class WifiController {
     private BroadcastReceiver wifiStateReceiver;
     private ConnectivityManager.NetworkCallback networkCallback;
     private WifiStateListener stateListener;
+
+    // Power Locks & Proactive Scanning to prevent Wi-Fi chip and CPU sleep when screen is off
+    private WifiManager.WifiLock wifiLock;
+    private PowerManager.WakeLock wakeLock;
+    private BroadcastReceiver scanResultsReceiver;
+    private final Handler scanHandler = new Handler(Looper.getMainLooper());
+    private Runnable scanRetryRunnable;
+    private volatile boolean isScanningLoopActive = false;
 
     public interface WifiStateListener {
         void onWifiStateChanged(boolean isEnabled, String details);
@@ -109,6 +120,14 @@ public class WifiController {
             return false;
         }
 
+        if (enable) {
+            // Guarantee Wi-Fi radio and CPU remain at full performance with screen off
+            acquirePowerLocks();
+        } else {
+            // Cleanly stop scanner and release locks
+            releasePowerLocks();
+        }
+
         boolean toggled = false;
 
         // 1. Direct hardware call (setWifiEnabled)
@@ -146,7 +165,12 @@ public class WifiController {
             } catch (Throwable ignored) {}
         }
 
-        // 4. Fallback for Android 10+ standard network bindings
+        // 4. If enabled, start proactive scanning and auto-reconnection
+        if (enable) {
+            startProactiveScanning();
+        }
+
+        // 5. Fallback for Android 10+ standard network bindings
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             if (enable) {
                 requestWifiNetworkBackground();
@@ -245,6 +269,7 @@ public class WifiController {
      * Unregisters broadcast and network callbacks.
      */
     public void stopMonitoring() {
+        releasePowerLocks();
         if (wifiStateReceiver != null) {
             try {
                 context.unregisterReceiver(wifiStateReceiver);
@@ -257,6 +282,152 @@ public class WifiController {
             } catch (Exception ignored) {}
             networkCallback = null;
         }
+    }
+
+    /**
+     * Acquires high-performance WifiLock and CPU WakeLock to guarantee the Wi-Fi radio
+     * and kernel scanning routines operate continuously even when the screen is locked and off.
+     */
+    public synchronized void acquirePowerLocks() {
+        try {
+            if (wifiManager != null && (wifiLock == null || !wifiLock.isHeld())) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "SmartBus:WifiDischargeLock");
+                } else {
+                    wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "SmartBus:WifiDischargeLock");
+                }
+                wifiLock.setReferenceCounted(false);
+                wifiLock.acquire();
+                logger.s(TAG, "[Power] WifiLock de alto rendimiento ADQUIRIDO (evita reposo de radio Wi-Fi con pantalla apagada).");
+            }
+        } catch (Throwable t) {
+            logger.w(TAG, "Error adquiriendo WifiLock: " + t.getMessage());
+        }
+
+        try {
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (pm != null && (wakeLock == null || !wakeLock.isHeld())) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SmartBus:WifiWakeLock");
+                wakeLock.setReferenceCounted(false);
+                wakeLock.acquire(15 * 60 * 1000L); // Hasta 15 minutos (o hasta que se libere con el schedule)
+                logger.s(TAG, "[Power] WakeLock parcial ADQUIRIDO (evita suspensión de CPU durante escaneo y conexión).");
+            }
+        } catch (Throwable t) {
+            logger.w(TAG, "Error adquiriendo WakeLock: " + t.getMessage());
+        }
+    }
+
+    /**
+     * Releases WifiLock and WakeLock when the Wi-Fi window finishes.
+     */
+    public synchronized void releasePowerLocks() {
+        stopProactiveScanning();
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) {
+                wifiLock.release();
+                logger.i(TAG, "[Power] WifiLock liberado.");
+            }
+        } catch (Throwable ignored) {}
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+                logger.i(TAG, "[Power] WakeLock liberado.");
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Forces immediate and periodic Wi-Fi beacon scanning and auto-reconnection
+     * to wake up the radio when the phone is locked with the screen off.
+     */
+    public synchronized void startProactiveScanning() {
+        if (wifiManager == null) return;
+
+        // 1. Listen for Wi-Fi scan results broadcast
+        if (scanResultsReceiver == null) {
+            scanResultsReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context ctx, Intent intent) {
+                    if (WifiManager.SCAN_RESULTS_AVAILABLE_ACTION.equals(intent.getAction())) {
+                        boolean updated = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false);
+                        logger.d(TAG, "[Wi-Fi Scanner] Resultados de escaneo disponibles (actualizado=" + updated + "). Forzando conexión a red conocida...");
+                        try {
+                            wifiManager.reconnect();
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            };
+            try {
+                context.registerReceiver(scanResultsReceiver, new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+            } catch (Throwable t) {
+                logger.w(TAG, "Error registrando scanResultsReceiver: " + t.getMessage());
+            }
+        }
+
+        // 2. Periodic trigger: scan and reconnect every 8 seconds until connected
+        isScanningLoopActive = true;
+        if (scanRetryRunnable == null) {
+            scanRetryRunnable = new Runnable() {
+                private int attemptCount = 0;
+                @Override
+                public void run() {
+                    if (!isScanningLoopActive || wifiManager == null) return;
+
+                    if (isWifiConnected()) {
+                        logger.d(TAG, "[Wi-Fi Scanner] Dispositivo conectado a Wi-Fi. Pausando escaneo proactivo.");
+                        return;
+                    }
+
+                    attemptCount++;
+                    try {
+                        logger.i(TAG, "[Wi-Fi Scanner] Disparando escaneo de balizas y reconexión proactiva (intento #" + attemptCount + " con pantalla apagada)...");
+                        boolean scanTriggered = wifiManager.startScan();
+                        wifiManager.reconnect();
+                        wifiManager.reassociate();
+                        logger.d(TAG, "[Wi-Fi Scanner] startScan() ejecutado: " + scanTriggered);
+                    } catch (Throwable t) {
+                        logger.w(TAG, "[Wi-Fi Scanner] Fallo disparando escaneo: " + t.getMessage());
+                    }
+
+                    if (isScanningLoopActive) {
+                        scanHandler.postDelayed(this, 8_000L);
+                    }
+                }
+            };
+        }
+
+        scanHandler.removeCallbacks(scanRetryRunnable);
+        scanHandler.post(scanRetryRunnable);
+    }
+
+    public synchronized void stopProactiveScanning() {
+        isScanningLoopActive = false;
+        if (scanRetryRunnable != null) {
+            scanHandler.removeCallbacks(scanRetryRunnable);
+        }
+        if (scanResultsReceiver != null) {
+            try {
+                context.unregisterReceiver(scanResultsReceiver);
+            } catch (Throwable ignored) {}
+            scanResultsReceiver = null;
+        }
+    }
+
+    private boolean isWifiConnected() {
+        if (connectivityManager == null) return false;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network active = connectivityManager.getActiveNetwork();
+                if (active != null) {
+                    NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(active);
+                    return caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+                }
+            } else {
+                android.net.NetworkInfo ni = connectivityManager.getNetworkInfo(ConnectivityManager.TYPE_WIFI);
+                return ni != null && ni.isConnected();
+            }
+        } catch (Throwable ignored) {}
+        return false;
     }
 }
 

@@ -110,6 +110,9 @@ public class PersistentWifiTcpService extends Service {
             // Start Cloud & Messaging Layer (RabbitMQ AMQP: Cellular Real-time + Wi-Fi Batch)
             com.example.service.amqp.AmqpCloudManager.getInstance(this).start();
 
+            // Start ESP32 Hardware Relay Controller (Process 1: flag check c/30s, Process 2: TCP dispatch c/1min)
+            com.example.service.hardware.HardwareRelayController.getInstance(this).start();
+
             // Start background scheduler loop and alarm watchdog
             startAutonomousSchedulerLoop();
             scheduleNextAlarmWatchdog();
@@ -471,6 +474,10 @@ public class PersistentWifiTcpService extends Service {
 
         try {
             com.example.service.amqp.AmqpCloudManager.getInstance(this).stop();
+        } catch (Throwable ignored) {}
+
+        try {
+            com.example.service.hardware.HardwareRelayController.getInstance(this).stop();
         } catch (Throwable ignored) {}
 
         if (schedulerExecutor != null && !schedulerExecutor.isShutdown()) {
