@@ -47,14 +47,13 @@ class AmqpRealtimeTransmitter(private val context: Context) {
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
 
     private val transmitterScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var transmitterJob: Job? = null
     private var watchdogJob: Job? = null
 
-    // Channel for incoming 1s telemetry snapshots (dropping oldest if disconnected/slow)
-    private val snapshotQueue = CoroutineChannel<UnifiedTelemetrySnapshot>(
-        capacity = 10,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
+    // Single-thread dispatcher for immediate realtime network send (no buffer queues)
+    private val sendExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "AmqpRealtimeDirectSend").apply { isDaemon = true }
+    }
+    private val isSendingNow = AtomicBoolean(false)
 
     // Current State & Metrics
     private val _stats = MutableStateFlow(RealtimeStats())
@@ -157,7 +156,6 @@ class AmqpRealtimeTransmitter(private val context: Context) {
         logger.s(TAG, "Starting AMQP Real-time Transmitter for target: ${params.host}:${params.port} (SIM Cellular)...")
 
         registerCellularNetwork()
-        startDispatchLoop()
         startWatchdogLoop()
     }
 
@@ -171,19 +169,43 @@ class AmqpRealtimeTransmitter(private val context: Context) {
     }
 
     /**
-     * Non-blocking entry point for 1-second snapshots from TelemetryEngine.
-     * When paused (e.g. during Wi-Fi discharge window), snapshots are silently ignored
-     * without incrementing dropped counter (data is safely persisted in Room SQLite).
+     * Immediate 1-second pulse entry point from TelemetryEngine:
+     * No queues, no buffers. Checks network and connection availability;
+     * if busy or offline, drops immediately and moves on to next second.
      */
     fun enqueueSnapshot(snapshot: UnifiedTelemetrySnapshot) {
         if (!shouldRun.get() || isPaused.get()) return
 
-        val result = snapshotQueue.trySend(snapshot)
-        if (!result.isSuccess) {
+        // 1. Quick check: Is connection and channel ready?
+        val connection = amqpConnection
+        val channel = amqpChannel
+        if (connection == null || channel == null || !connection.isOpen || !channel.isOpen) {
+            // Not ready/offline: discard immediately (raw data safely kept in SQLite)
             packetsDroppedCounter.incrementAndGet()
-            _stats.value = _stats.value.copy(
-                packetsDropped = packetsDroppedCounter.get()
-            )
+            _stats.value = _stats.value.copy(packetsDropped = packetsDroppedCounter.get())
+            return
+        }
+
+        // 2. Concurrency check: If a previous transmission is still in-flight on the socket,
+        // drop this snapshot immediately. Never queue or burst into the next second.
+        if (!isSendingNow.compareAndSet(false, true)) {
+            packetsDroppedCounter.incrementAndGet()
+            _stats.value = _stats.value.copy(packetsDropped = packetsDroppedCounter.get())
+            return
+        }
+
+        try {
+            sendExecutor.execute {
+                try {
+                    transmitSnapshot(snapshot)
+                } finally {
+                    isSendingNow.set(false)
+                }
+            }
+        } catch (t: Throwable) {
+            isSendingNow.set(false)
+            packetsDroppedCounter.incrementAndGet()
+            _stats.value = _stats.value.copy(packetsDropped = packetsDroppedCounter.get())
         }
     }
 
@@ -194,11 +216,6 @@ class AmqpRealtimeTransmitter(private val context: Context) {
     fun pause() {
         if (isPaused.getAndSet(true)) return
         logger.s(TAG, "Wi-Fi discharge window active: Pausing Real-Time Cellular AMQP stream.")
-
-        // Drain any pending items in channel queue
-        while (snapshotQueue.tryReceive().isSuccess) {
-            // drain
-        }
 
         abortConnectionSafely()
         _stats.value = _stats.value.copy(
@@ -306,22 +323,6 @@ class AmqpRealtimeTransmitter(private val context: Context) {
                 lastError = "[Mobile Network] Cellular radio unavailable on device",
                 state = RealtimeStreamState.ERROR
             )
-        }
-    }
-
-    private fun startDispatchLoop() {
-        transmitterJob?.cancel()
-        transmitterJob = transmitterScope.launch {
-            while (isActive && shouldRun.get()) {
-                try {
-                    val snapshot = snapshotQueue.receive()
-                    transmitSnapshot(snapshot)
-                } catch (t: Throwable) {
-                    if (isActive) {
-                        logger.w(TAG, "Error in snapshot dispatch loop: ${t.message}")
-                    }
-                }
-            }
         }
     }
 
@@ -564,13 +565,13 @@ class AmqpRealtimeTransmitter(private val context: Context) {
             connectivityManager?.unregisterNetworkCallback(cellularNetworkCallback)
         } catch (ignored: Throwable) {}
 
-        transmitterJob?.cancel()
         watchdogJob?.cancel()
 
         abortConnectionSafely()
 
         sharedExecutor?.shutdownNow()
         sharedExecutor = null
+        sendExecutor.shutdownNow()
 
         _stats.value = RealtimeStats(state = RealtimeStreamState.IDLE)
     }

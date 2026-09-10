@@ -61,8 +61,9 @@ class BoundNetworkSocketFactory(
         try {
             network.bindSocket(socket)
             socket.tcpNoDelay = true
-            socket.sendBufferSize = 256 * 1024
-            socket.receiveBufferSize = 256 * 1024
+            socket.soTimeout = 3000 // 3s read timeout to quickly detect stalled socket
+            socket.sendBufferSize = 64 * 1024
+            socket.receiveBufferSize = 64 * 1024
         } catch (ignored: Exception) {}
     }
 

@@ -70,7 +70,7 @@ public class UnifiedTelemetrySnapshot {
 
     /**
      * Serializes to a strictly FLAT single-level JSON structure:
-     * - Root fields: device_id, timestamp, seq, type ("realtime")
+     * - Root fields: device_id, timestamp, type ("realtime")
      * - Location fields: lat, lon, alt, speed, bearing, accuracy, satellites, provider, has_fix
      * - Inertial fields: accx, accy, accz, acc_mag, acc_available, gyrx, gyry, gyrz, gyr_available, magx, magy, magz, mag_available, pitch, roll, yaw, pry_available
      * - Device fields: soc, is_charging, temp_c, voltage_mv, health, free_ram_mb, total_ram_mb, ram_usage_pct, free_storage_gb, total_storage_gb
@@ -81,7 +81,6 @@ public class UnifiedTelemetrySnapshot {
         try {
             root.put("device_id", deviceId);
             root.put("timestamp", timestamp);
-            root.put("seq", sequenceNumber);
             root.put("type", "realtime");
 
             // 1. Location (flat) - omit location's own timestamp to avoid overwriting root timestamp

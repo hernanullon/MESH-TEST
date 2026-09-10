@@ -105,8 +105,8 @@ public class TelemetryEngine {
                     TimeUnit.SECONDS
             );
 
-            // UI Snapshot & Supervisor cycle at 1 Hz
-            engineExecutor.scheduleWithFixedDelay(
+            // UI Snapshot & Real-time transmission cycle at strict 1 Hz fixed rate
+            engineExecutor.scheduleAtFixedRate(
                     this::updateSnapshotAndWatchdog,
                     1,
                     1,
@@ -192,7 +192,11 @@ public class TelemetryEngine {
             String deviceId = getEffectiveDeviceId();
             LocationTelemetry loc = locationCollector.getLastLocation();
             InertialTelemetry imu = inertialCollector.getLastSnapshot();
-            DeviceStatusTelemetry dev = deviceStatusCollector.sample();
+            // Fast in-memory lookup to guarantee zero disk/battery intent I/O jitter in 1-second pulse
+            DeviceStatusTelemetry dev = deviceStatusCollector.getLastSnapshot();
+            if (dev == null) {
+                dev = deviceStatusCollector.sample();
+            }
 
             long seq = sequenceGenerator.incrementAndGet();
             long now = System.currentTimeMillis();
